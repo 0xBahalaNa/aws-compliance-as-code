@@ -1,0 +1,25 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "PreventOpenSSH",
+            "Effect": "Deny",
+            "Action": [
+                "ec2:AuthorizeSecurityGroupIngress",
+                "ec2:ModifySecurityGroupRules"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "ec2:Region": "us-west-1"
+                },
+                "IpAddress": {
+                    "ec2:SecurityGroupIngressIpRanges": ["0.0.0.0/0"]
+                },
+                "NumericEquals": {
+                    "ec2:SecurityGroupIngressToPort": 22
+                }
+            }
+        }
+    ]
+}
