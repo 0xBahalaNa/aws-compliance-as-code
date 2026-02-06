@@ -1,4 +1,4 @@
-# Infrastructure as Code (IaC) in AWS
+# AWS Compliance as Code
 
 This repository implements Infrastructure as Code (IaC) in AWS by deploying resources via a CloudFormation template and accompanying Service Control Policies (SCPs). 
 
