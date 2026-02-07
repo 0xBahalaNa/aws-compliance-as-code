@@ -12,8 +12,6 @@ This project implements compliance controls as code using AWS Service Control Po
 
 The controls in this repository map to requirements from CJIS Security Policy, FedRAMP, and NIST 800-53, demonstrating how compliance frameworks translate into real, enforceable cloud infrastructure policies.
 
----
-
 ## Architecture Overview
 
 ```mermaid
@@ -30,8 +28,6 @@ graph TD
 
 SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into individual accounts to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
 
----
-
 ## Compliance Frameworks
 
 ### CJIS Security Policy
@@ -46,8 +42,6 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 
 [NIST Special Publication 800-53 Revision 5](https://csf.tools/reference/sp-800-53/r5/) is the authoritative catalog of security and privacy controls for federal information systems. It serves as the foundation for both CJIS and FedRAMP requirements. Controls are organized into families (AC for Access Control, AU for Audit, SC for System and Communications Protection, CM for Configuration Management) and provide the technical specificity needed to translate compliance requirements into enforceable infrastructure policies.
 
----
-
 ## Controls Implemented
 
 | Control | File | Type | What It Enforces | Security Principle |
@@ -57,8 +51,6 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 | Prevent Insecure SSH | `scp-prevent-insecure-ssh.json` | SCP (Preventive) | Blocks security group rules that open SSH (port 22) to `0.0.0.0/0` in `us-west-1` | Network Boundary Protection |
 | Require S3 Encryption | `scp-require-s3-encryption.json` | SCP (Preventive) | Denies S3 bucket creation when encryption is not enabled | Data Protection at Rest |
 | Secure S3 Bucket | `secure-bucket.yaml` | CloudFormation (IaC) | Deploys an S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
-
----
 
 ## Compliance Framework Mapping
 
@@ -76,8 +68,6 @@ Each control was selected to address specific compliance requirements across CJI
 
 > **FedRAMP Baseline Key:** L = Low, M = Moderate, H = High
 
----
-
 ## Repository Structure
 
 ```
@@ -91,8 +81,6 @@ aws-compliance-as-code/
 └── README.md
 ```
 
----
-
 ## AWS Services Used
 
 - **[AWS Organizations](https://aws.amazon.com/organizations/)**: Hosts the SCPs and enforces guardrails across the account hierarchy
@@ -101,8 +89,6 @@ aws-compliance-as-code/
 - **[AWS S3](https://aws.amazon.com/s3/)**: Target service for the secure bucket deployment and encryption enforcement
 - **[AWS CloudTrail](https://aws.amazon.com/cloudtrail/)**: Audit logging service protected by the audit log deletion SCP
 - **[AWS CLI](https://aws.amazon.com/cli/)**: Interface for deploying SCPs and CloudFormation stacks
-
----
 
 ## How It Works
 
@@ -117,8 +103,6 @@ CloudFormation templates encode security requirements directly into resource def
 ### Defense in Depth
 
 SCPs prevent non-compliant actions at the organization level. CloudFormation ensures compliant defaults at the resource level. Git version control tracks every policy and template change, creating an auditable history that serves as evidence for compliance audits. This layered approach means a failure in one control does not compromise the overall security posture.
-
----
 
 ## Deployment
 
@@ -313,8 +297,6 @@ aws cloudformation delete-stack \
 
 </details>
 
----
-
 ## Key Takeaways
 
 - **Compliance as Code eliminates drift**: By encoding security requirements in CloudFormation, resources are provisioned correctly every time without relying on manual configuration.
@@ -327,8 +309,6 @@ aws cloudformation delete-stack \
 
 - **Version control as audit evidence**: Every policy change is tracked in Git, providing a complete history that serves as compliance evidence during audits.
 
----
-
 ## What This Project Demonstrates
 
 This project demonstrates the core GRC Engineering skill of translating compliance framework requirements into enforceable AWS controls. It showcases hands-on experience with AWS Organizations policy design, SCP authoring with condition-based logic, CloudFormation template development, and compliance framework mapping across CJIS Security Policy, FedRAMP, and NIST 800-53. The inclusion of CJIS and FedRAMP mappings reflects relevance to criminal justice environments and federal cloud authorization requirements.
@@ -336,8 +316,6 @@ This project demonstrates the core GRC Engineering skill of translating complian
 The controls were selected to illustrate a range of enforcement patterns, from broad service restrictions (`ec2:*` deny) to condition-based rules (SSH port + CIDR + region matching) to encryption mandates, demonstrating the flexibility of SCPs as a compliance enforcement mechanism.
 
 This foundation positions the project for expansion into CI/CD pipeline guardrails, AWS Config rules for continuous compliance monitoring, drift remediation automation, and multi-account architectures with OU-scoped policies.
-
----
 
 ## References
 
