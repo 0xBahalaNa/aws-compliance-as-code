@@ -23,7 +23,7 @@ graph TD
     B --> F["SCP: Require S3 Encryption"]
     B --> G[Organizational Units / Accounts]
     G --> H[CloudFormation Stack]
-    H --> I["Secure S3 Bucket\nPublic Access Blocked\nAES256 Encryption"]
+    H --> I["Secure S3 Bucket<br/>Public Access Blocked<br/>AES256 Encryption"]
 ```
 
 SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into individual accounts to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
