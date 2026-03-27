@@ -46,11 +46,11 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 
 | Control | File | Type | What It Enforces | Security Principle |
 |---|---|---|---|---|
-| Deny Audit Log Deletion | `scp-deny-audit-log-deletion.json` | SCP (Preventive) | Blocks `cloudtrail:DeleteTrail` and `cloudtrail:StopLogging` across the organization | Audit Integrity |
-| Deny EC2 Actions | `scp-deny-ec2-actions.json` | SCP (Preventive) | Denies all EC2 actions (`ec2:*`) org-wide, restricting unauthorized compute usage | Least Functionality |
-| Prevent Insecure SSH | `scp-prevent-insecure-ssh.json` | SCP (Preventive) | Blocks security group rules that open SSH (port 22) to `0.0.0.0/0` in `us-west-1` | Network Boundary Protection |
-| Require S3 Encryption | `scp-require-s3-encryption.json` | SCP (Preventive) | Denies S3 bucket creation when encryption is not enabled | Data Protection at Rest |
-| Secure S3 Bucket | `secure-bucket.yaml` | CloudFormation (IaC) | Deploys an S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
+| Deny Audit Log Deletion | `scps/scp-deny-audit-log-deletion.json` | SCP (Preventive) | Blocks `cloudtrail:DeleteTrail` and `cloudtrail:StopLogging` across the organization | Audit Integrity |
+| Deny EC2 Actions | `scps/scp-deny-ec2-actions.json` | SCP (Preventive) | Denies all EC2 actions (`ec2:*`) org-wide, restricting unauthorized compute usage | Least Functionality |
+| Prevent Insecure SSH | `scps/scp-prevent-insecure-ssh.json` | SCP (Preventive) | Blocks security group rules that open SSH (port 22) to `0.0.0.0/0` in `us-west-1` | Network Boundary Protection |
+| Require S3 Encryption | `scps/scp-require-s3-encryption.json` | SCP (Preventive) | Denies S3 bucket creation when encryption is not enabled | Data Protection at Rest |
+| Secure S3 Bucket | `cloudformation/secure-bucket.yaml` | CloudFormation (IaC) | Deploys an S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
 
 ## Compliance Framework Mapping
 
@@ -72,11 +72,13 @@ Each control was selected to address specific compliance requirements across CJI
 
 ```
 aws-compliance-as-code/
-├── secure-bucket.yaml                  # CloudFormation: Secure S3 bucket (public access block + AES256)
-├── scp-deny-audit-log-deletion.json    # SCP: Prevent CloudTrail deletion/stop logging
-├── scp-deny-ec2-actions.json           # SCP: Deny all EC2 actions org-wide
-├── scp-prevent-insecure-ssh.json       # SCP: Block SSH port 22 open to 0.0.0.0/0 (us-west-1)
-├── scp-require-s3-encryption.json      # SCP: Require encryption on S3 bucket creation
+├── cloudformation/
+│   └── secure-bucket.yaml              # CloudFormation: Secure S3 bucket (public access block + AES256)
+├── scps/
+│   ├── scp-deny-audit-log-deletion.json    # SCP: Prevent CloudTrail deletion/stop logging
+│   ├── scp-deny-ec2-actions.json           # SCP: Deny all EC2 actions org-wide
+│   ├── scp-prevent-insecure-ssh.json       # SCP: Block SSH port 22 open to 0.0.0.0/0 (us-west-1)
+│   └── scp-require-s3-encryption.json      # SCP: Require encryption on S3 bucket creation
 ├── LICENSE.txt                         # MIT License
 └── README.md
 ```
