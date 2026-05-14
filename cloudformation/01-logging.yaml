@@ -1,0 +1,241 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Layer 1 - Logging & Monitoring. Deploys a multi-region CloudTrail with a
+  tamper-proof S3 log bucket (Object Lock in COMPLIANCE mode), a CloudWatch
+  Log Group for near-real-time delivery, and a VPC Flow Log on the default VPC.
+  Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.0
+  5.4.1 - integrity controls in place; encryption-at-rest closure deferred
+  to Layer 3 (agency-managed CMK).
+
+Parameters:
+  TrailName:
+    Type: String
+    Default: org-cloudtrail
+    Description: Name of the multi-region CloudTrail trail.
+
+  CloudWatchRetentionInDays:
+    Type: Number
+    Default: 90
+    AllowedValues: [30, 60, 90, 180, 365, 400, 545, 731, 1827, 3653]
+    Description: >-
+      CloudWatch Logs retention for the CloudTrail and Flow Logs groups. S3
+      Object Lock handles long-term immutable retention; CloudWatch is the
+      hot, queryable copy.
+
+  S3ObjectLockRetentionDays:
+    Type: Number
+    Default: 365
+    MinValue: 1
+    Description: >-
+      Default Object Lock retention applied to every log object in COMPLIANCE
+      mode. FedRAMP High AU-11 baseline is 1 year online; raise for longer
+      mandates.
+
+  DefaultVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >-
+      VPC to attach Flow Logs to. Select the default VPC for AC compliance;
+      CloudFormation has no intrinsic for "default VPC", so it is parameterized.
+
+Resources:
+
+  # S3 bucket holding immutable CloudTrail log files. Object Lock must be
+  # enabled at create time (AWS::S3::Bucket.ObjectLockEnabled is immutable),
+  # so the bucket is the foundation of the AU-9 evidence-integrity story.
+  CloudTrailLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "cloudtrail-logs-${AWS::AccountId}"
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            # COMPLIANCE mode: even the root account cannot shorten or delete
+            # within the retention window. This is what AU-9 "Protection of
+            # Audit Information" leans on for evidence integrity.
+            Mode: COMPLIANCE
+            Days: !Ref S3ObjectLockRetentionDays
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          # SSE-S3 baseline. Layer 3 (KMS) replaces with a customer-managed CMK
+          # so CJIS v6.0 agency-managed-key requirements are met.
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        # Required for Object Lock; also lets a poisoned overwrite be ignored
+        # because previous versions remain immutable.
+        Status: Enabled
+
+  # Bucket policy: (1) grants CloudTrail the writes it needs, (2) explicitly
+  # denies deletion of log objects. Object Lock is the hard control; this is
+  # the auditable, plain-English layer that maps cleanly to AU-9.
+  CloudTrailLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudTrailLogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudTrailGetBucketAcl
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailLogsBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowCloudTrailPutObject
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${CloudTrailLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: DenyLogObjectDeletion
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:DeleteObject
+              - s3:DeleteObjectVersion
+            Resource: !Sub "${CloudTrailLogsBucket.Arn}/*"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt CloudTrailLogsBucket.Arn
+              - !Sub "${CloudTrailLogsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # CloudWatch Log Group is the hot, queryable mirror of CloudTrail events.
+  # S3 stores immutable evidence; CloudWatch is for alerting and ad-hoc
+  # investigation (AU-6 review/analysis lives here, even though this layer
+  # is technically AU-2/3/9/12).
+  CloudTrailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/cloudtrail/${TrailName}"
+      RetentionInDays: !Ref CloudWatchRetentionInDays
+
+  # IAM role CloudTrail assumes to write events into CloudWatch Logs.
+  # Scoped strictly to the log group ARN — least privilege per AC-6.
+  CloudTrailToCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudTrailWriteCloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${CloudTrailLogGroup.Arn}:*"
+
+  # The trail itself. IsMultiRegionTrail + IncludeGlobalServiceEvents is the
+  # AU-2/AU-12 completeness story: every region's API plus global services
+  # (IAM, STS, CloudFront, Route 53) are captured by a single trail. Log file
+  # validation produces SHA-256 digest files in S3, which is the AU-9
+  # cryptographic-integrity check on top of Object Lock immutability.
+  MainTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailLogsBucketPolicy
+    Properties:
+      TrailName: !Ref TrailName
+      S3BucketName: !Ref CloudTrailLogsBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      CloudWatchLogsLogGroupArn: !GetAtt CloudTrailLogGroup.Arn
+      CloudWatchLogsRoleArn: !GetAtt CloudTrailToCloudWatchRole.Arn
+
+  # VPC Flow Logs cover the data plane (packets moving through ENIs) which
+  # CloudTrail does NOT see. CloudTrail = "who called the API"; Flow Logs =
+  # "what traffic crossed the wire". Both are needed for AU-2 completeness.
+  FlowLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vpc/flowlogs/${DefaultVpcId}"
+      RetentionInDays: !Ref CloudWatchRetentionInDays
+
+  FlowLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FlowLogsWriteCloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub "${FlowLogsGroup.Arn}:*"
+
+  DefaultVpcFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceType: VPC
+      ResourceId: !Ref DefaultVpcId
+      # TrafficType ALL captures accepted + rejected so denied connection
+      # attempts (potential reconnaissance) are evidence too.
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref FlowLogsGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogsRole.Arn
+
+Outputs:
+  CloudTrailLogsBucketName:
+    Description: S3 bucket holding immutable CloudTrail logs.
+    Value: !Ref CloudTrailLogsBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudTrailLogsBucketName"
+
+  CloudTrailArn:
+    Description: ARN of the multi-region trail.
+    Value: !GetAtt MainTrail.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudTrailArn"
+
+  CloudTrailLogGroupArn:
+    Description: CloudWatch Log Group ARN for downstream metric filters and alarms.
+    Value: !GetAtt CloudTrailLogGroup.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudTrailLogGroupArn"
+
+  FlowLogsGroupArn:
+    Description: CloudWatch Log Group ARN for VPC Flow Logs.
+    Value: !GetAtt FlowLogsGroup.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FlowLogsGroupArn"
