@@ -3,7 +3,9 @@ Description: >-
   Layer 1 - Logging & Monitoring. Deploys a multi-region CloudTrail with a
   tamper-proof S3 log bucket (Object Lock in COMPLIANCE mode), a CloudWatch
   Log Group for near-real-time delivery, and a VPC Flow Log on the default VPC.
-  Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12 and CJIS v6.0 5.4.1.
+  Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.0
+  5.4.1 - integrity controls in place; encryption-at-rest closure deferred
+  to Layer 3 (agency-managed CMK).
 
 Parameters:
   TrailName:
@@ -45,7 +47,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub "cloudtrail-logs-${AWS::AccountId}-${AWS::Region}"
+      BucketName: !Sub "cloudtrail-logs-${AWS::AccountId}"
       ObjectLockEnabled: true
       ObjectLockConfiguration:
         ObjectLockEnabled: Enabled
@@ -157,7 +159,7 @@ Resources:
   # (IAM, STS, CloudFront, Route 53) are captured by a single trail. Log file
   # validation produces SHA-256 digest files in S3, which is the AU-9
   # cryptographic-integrity check on top of Object Lock immutability.
-  OrgCloudTrail:
+  MainTrail:
     Type: AWS::CloudTrail::Trail
     DependsOn: CloudTrailLogsBucketPolicy
     Properties:
@@ -222,7 +224,7 @@ Outputs:
 
   CloudTrailArn:
     Description: ARN of the multi-region trail.
-    Value: !GetAtt OrgCloudTrail.Arn
+    Value: !GetAtt MainTrail.Arn
     Export:
       Name: !Sub "${AWS::StackName}-CloudTrailArn"
 
