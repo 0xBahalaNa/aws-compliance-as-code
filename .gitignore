@@ -1,0 +1,4 @@
+# Local Claude Code project instructions — intentionally not version-controlled.
+# Configures the AI assistant's behavior for this repo on the maintainer's
+# machine; it is not part of the deployable compliance baseline.
+CLAUDE.md
