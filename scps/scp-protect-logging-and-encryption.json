@@ -1,0 +1,21 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ProtectVpcFlowLogs",
+            "Effect": "Deny",
+            "Action": [
+                "ec2:DeleteFlowLogs"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ProtectEbsDefaultEncryption",
+            "Effect": "Deny",
+            "Action": [
+                "ec2:DisableEbsEncryptionByDefault"
+            ],
+            "Resource": "*"
+        }
+    ]
+}

@@ -1,0 +1,24 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "DenyAllActionsAsRootUser",
+            "Effect": "Deny",
+            "NotAction": [
+                "iam:CreateVirtualMFADevice",
+                "iam:EnableMFADevice",
+                "iam:ResyncMFADevice",
+                "iam:ListMFADevices",
+                "iam:ListVirtualMFADevices",
+                "iam:GetAccountSummary",
+                "support:*"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "StringLike": {
+                    "aws:PrincipalArn": "arn:aws:iam::*:root"
+                }
+            }
+        }
+    ]
+}

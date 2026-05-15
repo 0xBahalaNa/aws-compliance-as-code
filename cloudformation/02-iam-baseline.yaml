@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Layer 2 - IAM Baseline. Deploys an account-level password policy via a
+  Lambda-backed custom resource (AWS::IAM::AccountPasswordPolicy is not a
+  native CFN type), a read-only AuditorRole with MFA-required trust, and an
+  AdminRole with MFA + sts:ExternalId trust plus a PermissionsBoundary cap.
+  Satisfies NIST 800-53 Rev 5 AC-2, AC-3, AC-6, IA-5. Partial CJIS v6.0
+  5.6.2.1 (password attributes via IA-5); AAL2 phishing-resistant MFA
+  (5.6.2.2 / IA-2) is deferred to IAM Identity Center work.
+
+Parameters:
+  MinimumPasswordLength:
+    Type: Number
+    Default: 14
+    MinValue: 14
+    MaxValue: 128
+    Description: >-
+      Minimum password length. FedRAMP High baseline is 12; CJIS v6.0 aligns
+      with NIST 800-63B (8+ recommended for AAL1, 14+ for AAL2 with memorized
+      secrets). 14 is the conservative pick that covers both.
+
+  MaxPasswordAgeInDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 1095
+    Description: >-
+      Maximum password age before forced rotation. 90 days is the historical
+      FedRAMP/CJIS baseline; NIST 800-63B has moved away from forced rotation
+      unless there is evidence of compromise, but Rev 5 still permits it and
+      most audit baselines expect it.
+
+  PasswordReusePrevention:
+    Type: Number
+    Default: 24
+    MinValue: 1
+    MaxValue: 24
+    Description: >-
+      Number of prior passwords blocked from reuse. 24 is the max IAM allows
+      and matches the FedRAMP High baseline.
+
+  AdminRoleExternalId:
+    Type: String
+    Default: "CHANGEME-set-a-long-random-string-on-deploy"
+    NoEcho: true
+    MinLength: 16
+    Description: >-
+      sts:ExternalId required when assuming AdminRole. Prevents the confused
+      deputy problem: even a principal with sts:AssumeRole permission on this
+      role cannot assume it without the agreed-upon ExternalId. Override on
+      deploy with a long random string; the default is a placeholder so the
+      template validates but should never ship to production.
+
+Resources:
+
+  # IAM password policy is an account-wide singleton with no CloudFormation
+  # native resource type. AWS::IAM::AccountPasswordPolicy does not exist.
+  # The standard pattern is a Lambda-backed custom resource that calls the
+  # iam:UpdateAccountPasswordPolicy / iam:DeleteAccountPasswordPolicy APIs
+  # in response to CFN Create/Update/Delete lifecycle events.
+  PasswordPolicyLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ManagePasswordPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Resource MUST be "*" — the password policy is an account
+              # singleton with no ARN, not a named resource. This is the
+              # one case where "Resource: *" is correct under AC-6 because
+              # the action's resource type IS the account, and the action
+              # is scoped to two specific verbs.
+              - Effect: Allow
+                Action:
+                  - iam:UpdateAccountPasswordPolicy
+                  - iam:DeleteAccountPasswordPolicy
+                  - iam:GetAccountPasswordPolicy
+                Resource: "*"
+
+  PasswordPolicyLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-password-policy-cr"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt PasswordPolicyLambdaRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              iam = boto3.client('iam')
+              props = event.get('ResourceProperties', {})
+              request_type = event['RequestType']
+
+              try:
+                  if request_type in ('Create', 'Update'):
+                      iam.update_account_password_policy(
+                          MinimumPasswordLength=int(props.get('MinimumPasswordLength', 14)),
+                          RequireSymbols=props.get('RequireSymbols', 'true') == 'true',
+                          RequireNumbers=props.get('RequireNumbers', 'true') == 'true',
+                          RequireUppercaseCharacters=props.get('RequireUppercaseCharacters', 'true') == 'true',
+                          RequireLowercaseCharacters=props.get('RequireLowercaseCharacters', 'true') == 'true',
+                          AllowUsersToChangePassword=props.get('AllowUsersToChangePassword', 'true') == 'true',
+                          MaxPasswordAge=int(props.get('MaxPasswordAge', 90)),
+                          PasswordReusePrevention=int(props.get('PasswordReusePrevention', 24)),
+                          HardExpiry=props.get('HardExpiry', 'false') == 'true',
+                      )
+                  elif request_type == 'Delete':
+                      try:
+                          iam.delete_account_password_policy()
+                      except iam.exceptions.NoSuchEntityException:
+                          # Already gone — Delete should be idempotent so the
+                          # CFN stack can roll back cleanly even if a previous
+                          # Delete partially succeeded.
+                          pass
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  # The custom resource that wires the parameters above into the Lambda. CFN
+  # invokes the Lambda on Create / Update / Delete; the Lambda translates each
+  # event into the matching iam API call. The Custom:: prefix is convention,
+  # not enforced — the actual contract is the ServiceToken pointing at the
+  # Lambda ARN.
+  PasswordPolicy:
+    Type: Custom::IAMPasswordPolicy
+    Properties:
+      ServiceToken: !GetAtt PasswordPolicyLambda.Arn
+      MinimumPasswordLength: !Ref MinimumPasswordLength
+      MaxPasswordAge: !Ref MaxPasswordAgeInDays
+      PasswordReusePrevention: !Ref PasswordReusePrevention
+      RequireSymbols: "true"
+      RequireNumbers: "true"
+      RequireUppercaseCharacters: "true"
+      RequireLowercaseCharacters: "true"
+      AllowUsersToChangePassword: "true"
+      HardExpiry: "false"
+
+  # PermissionsBoundary capping what the AdminRole can do regardless of which
+  # identity-based policies are attached. Boundaries are not grants — they
+  # define the maximum permissions a principal can ever effectively have.
+  # SCP scopes to an account/OU; boundary scopes to a specific principal.
+  AdminPermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-admin-boundary"
+      Description: >-
+        Maximum permissions cap for AdminRole. Denies actions that would let
+        the admin disable audit logging, exfiltrate KMS keys, or break the
+        compliance baseline.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowMostAdminActions
+            Effect: Allow
+            Action: "*"
+            Resource: "*"
+          - Sid: DenyAuditAndLoggingTampering
+            Effect: Deny
+            Action:
+              - cloudtrail:DeleteTrail
+              - cloudtrail:StopLogging
+              - cloudtrail:PutEventSelectors
+              - cloudtrail:UpdateTrail
+              - logs:DeleteLogGroup
+              - logs:DeleteRetentionPolicy
+              - s3:DeleteBucket
+              - s3:PutBucketPolicy
+            Resource: "*"
+          - Sid: DenyKmsKeyDestruction
+            Effect: Deny
+            Action:
+              - kms:ScheduleKeyDeletion
+              - kms:DisableKey
+              - kms:DeleteAlias
+            Resource: "*"
+          - Sid: DenyIamBaselineTampering
+            Effect: Deny
+            Action:
+              - iam:DeleteAccountPasswordPolicy
+              - iam:UpdateAccountPasswordPolicy
+              - iam:DeleteRolePermissionsBoundary
+            Resource: "*"
+
+  # Read-only role for evidence collection, audit walkthroughs, and Config /
+  # Security Hub data export. Trusted by the account principal, requires MFA.
+  # Permissions = AWS-managed SecurityAudit + ReadOnlyAccess. Using the AWS
+  # managed policies (instead of crafting a custom one) is intentional:
+  # AWS updates them as new services launch, so the auditor role keeps pace
+  # without template churn. Trade-off: you accept whatever AWS adds.
+  AuditorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-auditor"
+      Description: >-
+        Read-only role for compliance evidence collection. Requires MFA on
+        assume.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustAccountPrincipalsWithMFA
+            Effect: Allow
+            Principal:
+              # Account-root principal allows any IAM identity in this account
+              # whose own policy grants sts:AssumeRole on this role. This is
+              # the portfolio/single-account pattern. In a real AWS Org,
+              # swap this for aws:PrincipalOrgID condition + Principal: "*"
+              # to grant cross-account access to all org members.
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              Bool:
+                # Refuses assume-role unless the caller authenticated with
+                # MFA in this session. Closes the path where a leaked
+                # long-lived access key alone could elevate to auditor.
+                aws:MultiFactorAuthPresent: "true"
+              NumericLessThan:
+                # Refuses if the MFA was used > 1 hour ago. Forces fresh
+                # auth even within a longer console session.
+                aws:MultiFactorAuthAge: "3600"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      MaxSessionDuration: 3600
+
+  # Privileged role for break-glass admin work. Trust policy uses two
+  # conditions on top of MFA: sts:ExternalId (confused-deputy protection —
+  # the caller must know an agreed-upon string, which a stolen sts:AssumeRole
+  # permission alone does not provide) and a short MaxSessionDuration so
+  # privileged sessions cannot be held open indefinitely.
+  AdminRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-admin"
+      Description: >-
+        Privileged break-glass role. Requires MFA + ExternalId on assume.
+        Permissions capped by AdminPermissionsBoundary.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustAccountPrincipalsWithMFAAndExternalId
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              Bool:
+                aws:MultiFactorAuthPresent: "true"
+              NumericLessThan:
+                aws:MultiFactorAuthAge: "900"
+              StringEquals:
+                sts:ExternalId: !Ref AdminRoleExternalId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      PermissionsBoundary: !Ref AdminPermissionsBoundary
+      MaxSessionDuration: 3600
+
+Outputs:
+  AuditorRoleArn:
+    Description: ARN of the read-only auditor role. Pass to Security Hub / Config / evidence collectors.
+    Value: !GetAtt AuditorRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-AuditorRoleArn"
+
+  AdminRoleArn:
+    Description: ARN of the boundary-capped admin role. Break-glass only.
+    Value: !GetAtt AdminRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-AdminRoleArn"
+
+  AdminPermissionsBoundaryArn:
+    Description: ARN of the permissions boundary applied to the admin role. Attach to other privileged roles to cap their effective permissions.
+    Value: !Ref AdminPermissionsBoundary
+    Export:
+      Name: !Sub "${AWS::StackName}-AdminPermissionsBoundaryArn"
