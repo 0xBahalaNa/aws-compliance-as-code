@@ -1,0 +1,284 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Layer 3 - Encryption. Deploys a customer-managed KMS key (CMK) with annual
+  rotation and a key policy separating IAM delegation, key administration, and
+  key usage; a stable alias; and account-level EBS encryption-by-default (via a
+  Lambda-backed custom resource) pointed at the CMK. The CMK ARN is exported so
+  Layer 1 can adopt it for the CloudTrail logs bucket. Satisfies NIST 800-53
+  Rev 5 SC-12, SC-13, SC-28, SC-28(1). CJIS v6.0 5.10.1.2 - agency-managed key
+  for CJI at rest; an AWS-managed key would place AWS personnel in CJIS scope.
+
+Parameters:
+  KeyAdministratorRoleArn:
+    Type: String
+    AllowedPattern: "arn:aws[a-z-]*:iam::[0-9]{12}:role/.+"
+    ConstraintDescription: Must be a full IAM role ARN, e.g. arn:aws:iam::<account>:role/<name> (aws-us-gov and aws-cn partitions also accepted).
+    Description: >-
+      ARN of the IAM role designated to ADMINISTER the CMK. Use the Layer 2
+      admin role: <iam-baseline-stack-name>-admin. This role manages the key
+      but the Layer 2 AdminPermissionsBoundary still denies ScheduleKeyDeletion
+      / DisableKey / DeleteAlias, so it cannot destroy the key. No default -
+      the key administrator must be set explicitly on every deploy.
+
+  KeyUserRoleArns:
+    Type: CommaDelimitedList
+    Description: >-
+      Comma-separated IAM role ARNs that need to USE the CMK to read data
+      encrypted under it - at minimum the Layer 2 auditor role
+      (<iam-baseline-stack-name>-auditor), which reads CloudTrail log objects
+      from the SSE-KMS bucket for evidence collection. Granted Decrypt and
+      DescribeKey only - read-only key usage (AC-6). No default - list the
+      reader role(s) explicitly.
+
+  KeyAliasName:
+    Type: String
+    Default: alias/compliance-baseline-cmk
+    AllowedPattern: "alias/[a-zA-Z0-9/_-]+"
+    ConstraintDescription: Must start with "alias/" then alphanumerics, dashes, underscores, or slashes.
+    Description: >-
+      Friendly alias for the CMK. Callers reference the key by this stable
+      name; the key material can rotate without touching any reference.
+
+  PendingDeletionWindowInDays:
+    Type: Number
+    Default: 30
+    MinValue: 7
+    MaxValue: 30
+    Description: >-
+      Waiting period before a key scheduled for deletion is destroyed.
+      Destroying a CMK is irreversible and renders every byte encrypted under
+      it permanently unrecoverable, so 30 (the maximum) is the conservative
+      compliance choice - the longest window to catch a mistake.
+
+Resources:
+
+  # The customer-managed CMK. This is the "agency-managed key" CJIS v6.0
+  # (5.10.1.2) requires for CJI at rest: the account - not AWS - owns the key
+  # policy and the key lifecycle, so AWS personnel cannot decrypt data
+  # protected by it. An AWS-managed key (aws/s3, aws/ebs) cannot satisfy this
+  # because AWS controls that key's policy.
+  #
+  # DeletionPolicy / UpdateReplacePolicy Retain: deleting OR replacing a CMK
+  # destroys all data encrypted under it. CloudTrail evidence (AU-9) and EBS
+  # data must outlive a stack teardown, so the key is retained, never
+  # auto-scheduled for deletion when the stack is removed.
+  ComplianceCmk:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: >-
+        Compliance baseline CMK. Encrypts CloudTrail logs (S3) and EBS volumes
+        at rest. NIST 800-53 SC-12 / SC-13 / SC-28; CJIS v6.0 5.10.1.2.
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT
+      # Single-region key. CLAUDE.md: do not span regions unless the control
+      # requires it - encryption at rest is satisfied per-region.
+      MultiRegion: false
+      PendingWindowInDays: !Ref PendingDeletionWindowInDays
+      # Annual rotation (SC-12). KMS generates fresh backing key material every
+      # 365 days; the key ID, ARN, and alias never change. Old material is kept
+      # so data encrypted before a rotation still decrypts - rotation does NOT
+      # re-encrypt existing data.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: compliance-baseline-cmk-policy
+        Statement:
+
+          # Statement 1 - the IAM-delegation switch. A key policy is the ROOT
+          # OF TRUST for a KMS key: unlike most AWS services, an IAM policy
+          # granting kms:Decrypt does nothing unless the key policy also allows
+          # it. Naming the account root principal (":root" = the ACCOUNT, not
+          # the root USER) is what makes IAM policies in this account effective
+          # for this key. AWS documents that removing this statement can
+          # permanently ORPHAN the key - if the named admin principals are
+          # later deleted, no one, not even AWS, can regain control. Kept by
+          # design.
+          - Sid: EnableIamPolicyDelegation
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+
+          # Statement 2 - the designated KEY ADMINISTRATOR. Names the admin
+          # role IN the key policy so the resource policy itself documents who
+          # governs the key (SC-12), auditable without cross-referencing IAM.
+          # The action list is management-only - it omits Encrypt / Decrypt /
+          # GenerateDataKey. (Because Statement 1 delegates to IAM, whether
+          # this role can also USE the key depends on its IAM policy; see the
+          # PR notes on that trade-off.)
+          - Sid: AllowKeyAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Ref KeyAdministratorRoleArn
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+              - kms:RotateKeyOnDemand
+            Resource: "*"
+
+          # Statement 3 - CloudTrail as a KEY USER. Once Layer 1's logs bucket
+          # uses SSE-KMS, CloudTrail must call GenerateDataKey to encrypt each
+          # log file it delivers (envelope encryption: KMS returns a data key,
+          # CloudTrail encrypts the log with it, the encrypted data key is
+          # stored beside the object). aws:SourceAccount blocks a trail in any
+          # other account from using this key - the same confused-deputy guard
+          # Layer 1's bucket policy already applies to CloudTrail.
+          - Sid: AllowCloudTrailToEncryptLogs
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action:
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+          # Statement 4 - designated KEY USERS. The roles that need to READ
+          # data encrypted under the CMK - chiefly the Layer 2 auditor role,
+          # which reads CloudTrail log objects from the SSE-KMS bucket for
+          # evidence collection. Without this, s3:GetObject on an encrypted
+          # log file fails: S3 calls kms:Decrypt as the auditor, whose AWS
+          # managed policies (ReadOnlyAccess / SecurityAudit) do not include
+          # it, and Statement 1 only delegates to IAM. Scoped to Decrypt +
+          # DescribeKey - read-only key usage, no GenerateDataKey (AC-6).
+          - Sid: AllowKeyUsage
+            Effect: Allow
+            Principal:
+              AWS: !Ref KeyUserRoleArns
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: "*"
+
+  # Alias = a stable, human-readable handle for the key. Templates and callers
+  # reference alias/... so the underlying key can be replaced without
+  # rewriting every reference.
+  ComplianceCmkAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Ref KeyAliasName
+      TargetKeyId: !Ref ComplianceCmk
+
+  # EBS encryption-by-default is an account + region toggle with no native
+  # CloudFormation resource type (the same gap Layer 2 hit with the IAM
+  # password policy). The pattern: a Lambda-backed custom resource that
+  # translates CFN Create / Update / Delete events into EC2 API calls.
+  #
+  # Execution role - least privilege: basic Lambda logging plus the two
+  # EBS-encryption verbs the handler actually calls.
+  EbsEncryptionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ManageEbsEncryptionDefault
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # These EC2 actions act on the account/region, not on a resource
+              # with an ARN, so Resource MUST be "*" - the same justified AC-6
+              # exception Layer 2 documents for the password-policy Lambda.
+              - Effect: Allow
+                Action:
+                  - ec2:EnableEbsEncryptionByDefault
+                  - ec2:ModifyEbsDefaultKmsKeyId
+                Resource: "*"
+
+  EbsEncryptionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-ebs-encryption-cr"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt EbsEncryptionLambdaRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          # A FIXED physical resource ID. Account-scoped settings have no
+          # natural ARN. Keeping the ID constant across Create and Update means
+          # CloudFormation never sees the custom resource as "replaced", so an
+          # Update (e.g. a new CmkArn) does not trigger a spurious Delete that
+          # would reset the EBS default key right after setting it.
+          PHYSICAL_ID = 'ebs-encryption-by-default'
+
+          def handler(event, context):
+              ec2 = boto3.client('ec2')
+              props = event.get('ResourceProperties', {})
+              request_type = event['RequestType']
+
+              try:
+                  if request_type in ('Create', 'Update'):
+                      # Encryption-by-default: every new EBS volume in this
+                      # region is encrypted with no per-volume opt-in (SC-28).
+                      ec2.enable_ebs_encryption_by_default()
+                      # Point the default at the agency-managed CMK instead of
+                      # the AWS-managed aws/ebs key (SC-12).
+                      ec2.modify_ebs_default_kms_key_id(KmsKeyId=props['CmkArn'])
+                  elif request_type == 'Delete':
+                      # No-op. The CMK has DeletionPolicy: Retain, so it
+                      # survives stack teardown and the account EBS default
+                      # can safely keep referencing it. Resetting to the
+                      # AWS-managed aws/ebs key here would be a silent CJIS
+                      # 5.10.1.2 regression; decommissioning the CMK is a
+                      # deliberate, separate action.
+                      pass
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, PHYSICAL_ID)
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)}, PHYSICAL_ID)
+
+  # CFN invokes the Lambda on Create / Update / Delete. The CmkArn property
+  # supplies the target key and makes the resource re-run if the key changes.
+  EbsEncryptionByDefault:
+    Type: Custom::EbsEncryptionDefault
+    Properties:
+      ServiceToken: !GetAtt EbsEncryptionLambda.Arn
+      CmkArn: !GetAtt ComplianceCmk.Arn
+
+Outputs:
+  ComplianceCmkArn:
+    Description: >-
+      ARN of the compliance baseline CMK. Pass to Layer 1 as the
+      LogsBucketCmkArn parameter to switch the CloudTrail logs bucket to SSE-KMS.
+    Value: !GetAtt ComplianceCmk.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ComplianceCmkArn"
+
+  ComplianceCmkId:
+    Description: Key ID of the compliance baseline CMK.
+    Value: !Ref ComplianceCmk
+    Export:
+      Name: !Sub "${AWS::StackName}-ComplianceCmkId"
+
+  ComplianceCmkAliasName:
+    Description: Alias of the compliance baseline CMK.
+    Value: !Ref ComplianceCmkAlias
+    Export:
+      Name: !Sub "${AWS::StackName}-ComplianceCmkAliasName"

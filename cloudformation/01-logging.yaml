@@ -4,8 +4,8 @@ Description: >-
   tamper-proof S3 log bucket (Object Lock in COMPLIANCE mode), a CloudWatch
   Log Group for near-real-time delivery, and a VPC Flow Log on the default VPC.
   Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.0
-  5.4.1 - integrity controls in place; encryption-at-rest closure deferred
-  to Layer 3 (agency-managed CMK).
+  5.4.1 - integrity controls in place; encryption-at-rest closes by passing
+  the Layer 3 CMK ARN to the LogsBucketCmkArn parameter (agency-managed key).
 
 Parameters:
   TrailName:
@@ -37,6 +37,23 @@ Parameters:
       VPC to attach Flow Logs to. Select the default VPC for AC compliance;
       CloudFormation has no intrinsic for "default VPC", so it is parameterized.
 
+  LogsBucketCmkArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of the Layer 3 compliance CMK (03-encryption.yaml output
+      ComplianceCmkArn). Leave empty on the first deploy - Layer 3 does not
+      exist yet, so the logs bucket falls back to SSE-S3 (AES256). After
+      Layer 3 is deployed, update this stack with the CMK ARN to switch the
+      bucket to SSE-KMS with the agency-managed key (SC-28 / CJIS 5.10.1.2).
+      Two-pass by design: Layer 1 is numbered first but its encryption key is
+      created in Layer 3.
+
+Conditions:
+  # True once a Layer 3 CMK ARN has been supplied. Selects SSE-KMS (the
+  # agency-managed CMK) over the SSE-S3 fallback for the logs bucket.
+  UseCmkForLogsBucket: !Not [!Equals [!Ref LogsBucketCmkArn, ""]]
+
 Resources:
 
   # S3 bucket holding immutable CloudTrail log files. Object Lock must be
@@ -65,10 +82,22 @@ Resources:
         RestrictPublicBuckets: true
       BucketEncryption:
         ServerSideEncryptionConfiguration:
-          # SSE-S3 baseline. Layer 3 (KMS) replaces with a customer-managed CMK
-          # so CJIS v6.0 agency-managed-key requirements are met.
+          # SSE-KMS with the Layer 3 agency-managed CMK once its ARN is wired
+          # in via LogsBucketCmkArn; SSE-S3 (AES256) as the pre-Layer-3
+          # fallback. CJIS v6.0 5.10.1.2 requires an agency-managed key for
+          # CJI at rest - the CMK branch closes that gap; AES256 alone uses an
+          # AWS-managed key.
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+              SSEAlgorithm: !If [UseCmkForLogsBucket, "aws:kms", "AES256"]
+              KMSMasterKeyID: !If
+                - UseCmkForLogsBucket
+                - !Ref LogsBucketCmkArn
+                - !Ref "AWS::NoValue"
+            # S3 Bucket Keys: with SSE-KMS, S3 generates one bucket-level key
+            # and derives per-object keys from it instead of calling KMS
+            # GenerateDataKey on every PUT - a large KMS cost cut for a
+            # high-volume log bucket. No effect under SSE-S3.
+            BucketKeyEnabled: !If [UseCmkForLogsBucket, true, !Ref "AWS::NoValue"]
       VersioningConfiguration:
         # Required for Object Lock; also lets a poisoned overwrite be ignored
         # because previous versions remain immutable.
