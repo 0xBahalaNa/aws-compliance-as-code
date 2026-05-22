@@ -1,4 +1,4 @@
-![AWS](https://img.shields.io/badge/AWS-Organizations%20%7C%20IAM%20%7C%20S3-FF9900?style=flat&logo=amazonwebservices)
+![AWS](https://img.shields.io/badge/AWS-Organizations%20%7C%20CloudTrail%20%7C%20IAM%20%7C%20KMS-FF9900?style=flat&logo=amazonwebservices)
 ![CloudFormation](https://img.shields.io/badge/IaC-CloudFormation-blue?style=flat&logo=amazonwebservices)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat)
 ![Compliance](https://img.shields.io/badge/Compliance-as%20Code-blueviolet?style=flat)
@@ -17,16 +17,21 @@ The controls in this repository map to requirements from CJIS Security Policy, F
 ```mermaid
 graph TD
     A[AWS Organization] --> B[Organization Root]
-    B --> C["SCP: Deny Audit Log Deletion"]
-    B --> D["SCP: Deny EC2 Actions"]
-    B --> E["SCP: Prevent Insecure SSH"]
-    B --> F["SCP: Require S3 Encryption"]
-    B --> G[Organizational Units / Accounts]
-    G --> H[CloudFormation Stack]
-    H --> I["Secure S3 Bucket<br/>Public Access Blocked<br/>AES256 Encryption"]
+    B --> SCP["Service Control Policies<br/>Preventive Guardrails"]
+    SCP --> S1["Deny Audit Log Deletion"]
+    SCP --> S2["Deny Root User Usage"]
+    SCP --> S3["Protect Logging and Encryption"]
+    SCP --> S4["Require S3 KMS Encryption"]
+    SCP --> S5["Restrict Network Changes by Region"]
+    B --> ACC["Member Account"]
+    ACC --> L1["Layer 1 (01-logging.yaml)<br/>CloudTrail + Object Lock S3 + VPC Flow Logs"]
+    ACC --> L2["Layer 2 (02-iam-baseline.yaml)<br/>Password Policy + Auditor and Admin Roles"]
+    ACC --> L3["Layer 3 (03-encryption.yaml)<br/>KMS CMK + EBS Default Encryption"]
+    ACC --> SB["secure-bucket.yaml<br/>Secure S3 Bucket"]
+    L3 -. exports CMK ARN .-> L1
 ```
 
-SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into individual accounts to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
+SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into member accounts as numbered layers (`01` → `02` → `03`), each building on the previous, to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
 
 ## Compliance Frameworks
 
@@ -44,25 +49,33 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 
 ## Controls Implemented
 
-| Control | File | Type | What It Enforces | Security Principle |
+| Control / Component | File | Type | What It Enforces | Security Principle |
 |---|---|---|---|---|
-| Deny Audit Log Deletion | `scps/scp-deny-audit-log-deletion.json` | SCP (Preventive) | Blocks `cloudtrail:DeleteTrail` and `cloudtrail:StopLogging` across the organization | Audit Integrity |
-| Deny EC2 Actions | `scps/scp-deny-ec2-actions.json` | SCP (Preventive) | Denies all EC2 actions (`ec2:*`) org-wide, restricting unauthorized compute usage | Least Functionality |
-| Prevent Insecure SSH | `scps/scp-prevent-insecure-ssh.json` | SCP (Preventive) | Blocks security group rules that open SSH (port 22) to `0.0.0.0/0` in `us-west-1` | Network Boundary Protection |
-| Require S3 Encryption | `scps/scp-require-s3-encryption.json` | SCP (Preventive) | Denies S3 bucket creation when encryption is not enabled | Data Protection at Rest |
-| Secure S3 Bucket | `cloudformation/secure-bucket.yaml` | CloudFormation (IaC) | Deploys an S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
+| Deny Audit Log Deletion | `scps/scp-deny-audit-log-deletion.json` | SCP (Preventive) | Denies `cloudtrail:DeleteTrail` and `cloudtrail:StopLogging` org-wide | Audit Integrity |
+| Deny Root User Usage | `scps/scp-deny-root-usage.json` | SCP (Preventive) | Denies all actions by the account root user, except MFA enrollment, account summary, and AWS Support | Least Privilege |
+| Protect Logging and Encryption | `scps/scp-protect-logging-and-encryption.json` | SCP (Preventive) | Denies `ec2:DeleteFlowLogs` and `ec2:DisableEbsEncryptionByDefault`, guarding the Layer 1 and Layer 3 controls | Audit Integrity / Data Protection |
+| Require S3 KMS Encryption | `scps/scp-require-s3-encryption.json` | SCP (Preventive) | Denies `s3:PutObject` unless the request specifies `aws:kms` server-side encryption | Data Protection at Rest |
+| Restrict Network Changes by Region | `scps/scp-restrict-network-changes-by-region.json` | SCP (Preventive) | Denies security group ingress/egress changes outside approved regions (`us-east-1`, `us-west-2`) | Network Boundary Protection |
+| Layer 1 — Logging and Monitoring | `cloudformation/01-logging.yaml` | CloudFormation (IaC) | Multi-region CloudTrail, an Object Lock (COMPLIANCE mode) log bucket, a CloudWatch log group, and VPC Flow Logs | Audit and Accountability |
+| Layer 2 — IAM Baseline | `cloudformation/02-iam-baseline.yaml` | CloudFormation (IaC) | Account password policy, a read-only auditor role, and an MFA + ExternalId admin role capped by a permissions boundary | Identity and Least Privilege |
+| Layer 3 — Encryption | `cloudformation/03-encryption.yaml` | CloudFormation (IaC) | Customer-managed KMS CMK with annual rotation, a separated key policy, and account-level EBS encryption-by-default | Data Protection at Rest |
+| Secure S3 Bucket | `cloudformation/secure-bucket.yaml` | CloudFormation (IaC) | An S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
 
 ## Compliance Framework Mapping
 
 Each control was selected to address specific compliance requirements across CJIS Security Policy, FedRAMP, and NIST 800-53. The combination of preventive SCPs and compliant-by-default IaC templates creates layered enforcement; SCPs act as guardrails that cannot be bypassed even by IAM administrators, while CloudFormation ensures new resources are provisioned to meet baseline security requirements without manual configuration.
 
-| Control | CJIS Security Policy (v6.0) | FedRAMP Baseline | NIST 800-53 Rev. 5 |
+| Control / Component | CJIS Security Policy (v6.0) | FedRAMP Baseline | NIST 800-53 Rev. 5 |
 |---|---|---|---|
 | Deny Audit Log Deletion | AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) | AU-9 (L/M/H), AU-12 (L/M/H) | AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) |
-| Deny EC2 Actions | CM-7 (Least Functionality), AC-6 (Least Privilege) | CM-7 (L/M/H), AC-6 (M/H) | CM-7 (Least Functionality), AC-6 (Least Privilege) |
-| Prevent Insecure SSH | SC-7 (Boundary Protection), AC-17 (Remote Access) | SC-7 (L/M/H), AC-17 (L/M/H) | SC-7 (Boundary Protection), AC-17 (Remote Access) |
-| Require S3 Encryption | SC-28 (Protection of Information at Rest), SC-13 (Cryptographic Protection) | SC-28 (M/H), SC-13 (L/M/H) | SC-28 (Protection of Information at Rest), SC-13 (Cryptographic Protection) |
-| Secure S3 Bucket (CFn) | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) | SC-28 (M/H), AC-3 (L/M/H) | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) |
+| Deny Root User Usage | AC-6 (Least Privilege), AC-3 (Access Enforcement) | AC-6 (M/H), AC-3 (L/M/H) | AC-6 (Least Privilege), AC-3 (Access Enforcement) |
+| Protect Logging and Encryption | AU-9 (Protection of Audit Information), SC-28 (Protection of Information at Rest) | AU-9 (L/M/H), SC-28 (M/H) | AU-9 (Protection of Audit Information), SC-28 (Protection of Information at Rest) |
+| Require S3 KMS Encryption | SC-28 (Protection of Information at Rest), SC-13 (Cryptographic Protection) | SC-28 (M/H), SC-13 (L/M/H) | SC-28 (Protection of Information at Rest), SC-13 (Cryptographic Protection) |
+| Restrict Network Changes by Region | SC-7 (Boundary Protection) | SC-7 (L/M/H) | SC-7 (Boundary Protection) |
+| Layer 1 — Logging and Monitoring | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9, AU-12 | AU-2 (L/M/H), AU-3 (L/M/H), AU-9 (L/M/H), AU-12 (L/M/H) | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) |
+| Layer 2 — IAM Baseline | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), IA-5 (Authenticator Management) | AC-2 (L/M/H), AC-3 (L/M/H), AC-6 (M/H), IA-5 (L/M/H) | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), IA-5 (Authenticator Management) |
+| Layer 3 — Encryption | SC-12 (Cryptographic Key Management), SC-13 (Cryptographic Protection), SC-28, SC-28(1) | SC-12 (L/M/H), SC-13 (L/M/H), SC-28 (M/H), SC-28(1) (M/H) | SC-12 (Cryptographic Key Establishment and Management), SC-13 (Cryptographic Protection), SC-28 (Protection of Information at Rest), SC-28(1) (Cryptographic Protection) |
+| Secure S3 Bucket | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) | SC-28 (M/H), AC-3 (L/M/H) | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) |
 
 > **Note:** CJIS v6.0 now uses NIST 800-53 control identifiers directly, so the CJIS and NIST columns share the same control IDs. The distinction is that CJIS scopes these requirements specifically to Criminal Justice Information (CJI), while NIST 800-53 applies broadly to federal information systems.
 
@@ -73,23 +86,33 @@ Each control was selected to address specific compliance requirements across CJI
 ```
 aws-compliance-as-code/
 ├── cloudformation/
-│   └── secure-bucket.yaml              # CloudFormation: Secure S3 bucket (public access block + AES256)
+│   ├── 01-logging.yaml                 # Layer 1: CloudTrail + Object Lock S3 + CloudWatch + VPC Flow Logs
+│   ├── 02-iam-baseline.yaml            # Layer 2: IAM password policy + auditor/admin roles
+│   ├── 03-encryption.yaml              # Layer 3: KMS CMK + alias + EBS encryption-by-default
+│   └── secure-bucket.yaml              # Standalone: secure S3 bucket (public access block + AES256)
 ├── scps/
-│   ├── scp-deny-audit-log-deletion.json    # SCP: Prevent CloudTrail deletion/stop logging
-│   ├── scp-deny-ec2-actions.json           # SCP: Deny all EC2 actions org-wide
-│   ├── scp-prevent-insecure-ssh.json       # SCP: Block SSH port 22 open to 0.0.0.0/0 (us-west-1)
-│   └── scp-require-s3-encryption.json      # SCP: Require encryption on S3 bucket creation
+│   ├── scp-deny-audit-log-deletion.json            # SCP: Deny CloudTrail DeleteTrail / StopLogging
+│   ├── scp-deny-root-usage.json                    # SCP: Deny root user actions (except MFA setup / support)
+│   ├── scp-protect-logging-and-encryption.json     # SCP: Deny DeleteFlowLogs / DisableEbsEncryptionByDefault
+│   ├── scp-require-s3-encryption.json              # SCP: Deny S3 PutObject without SSE-KMS
+│   └── scp-restrict-network-changes-by-region.json # SCP: Deny security group changes outside approved regions
 ├── LICENSE.txt                         # MIT License
 └── README.md
 ```
 
+The numbered CloudFormation prefixes (`01`–`03`) indicate deployment order; each layer builds on the one before it.
+
 ## AWS Services Used
 
-- **[AWS Organizations](https://aws.amazon.com/organizations/)**: Hosts the SCPs and enforces guardrails across the account hierarchy
-- **[AWS CloudFormation](https://aws.amazon.com/cloudformation/)**: Deploys compliant infrastructure as code (secure S3 bucket template)
-- **[AWS IAM](https://aws.amazon.com/iam/)**: Underlying permission system that SCPs override at the organization level
-- **[AWS S3](https://aws.amazon.com/s3/)**: Target service for the secure bucket deployment and encryption enforcement
-- **[AWS CloudTrail](https://aws.amazon.com/cloudtrail/)**: Audit logging service protected by the audit log deletion SCP
+- **[AWS Organizations](https://aws.amazon.com/organizations/)**: Hosts the SCPs and enforces preventive guardrails across the account hierarchy
+- **[AWS CloudFormation](https://aws.amazon.com/cloudformation/)**: Deploys the layered compliance infrastructure as code
+- **[AWS CloudTrail](https://aws.amazon.com/cloudtrail/)**: Multi-region API audit logging (Layer 1)
+- **[AWS KMS](https://aws.amazon.com/kms/)**: Customer-managed key for encryption at rest (Layer 3)
+- **[AWS IAM](https://aws.amazon.com/iam/)**: Password policy, scoped roles, and permissions boundary (Layer 2)
+- **[Amazon S3](https://aws.amazon.com/s3/)**: Object Lock log storage and the secure bucket baseline
+- **[Amazon EBS](https://aws.amazon.com/ebs/)**: Account-level encryption-by-default for new volumes (Layer 3)
+- **[Amazon CloudWatch Logs](https://aws.amazon.com/cloudwatch/)**: Hot, queryable copy of CloudTrail and VPC Flow Log events
+- **[AWS Lambda](https://aws.amazon.com/lambda/)**: Backs the custom resources for account settings with no native CloudFormation type
 - **[AWS CLI](https://aws.amazon.com/cli/)**: Interface for deploying SCPs and CloudFormation stacks
 
 ## How It Works
@@ -100,7 +123,7 @@ SCPs are attached at the Organization Root and act as permission boundaries that
 
 ### CloudFormation (Compliant by Default)
 
-CloudFormation templates encode security requirements directly into resource definitions. The secure S3 bucket template in this project provisions a bucket with public access blocked and encryption enabled every time it deploys, eliminating the possibility of configuration drift or manual misconfiguration. The template itself serves as auditable documentation of the intended secure state.
+CloudFormation templates encode security requirements directly into resource definitions, so resources deploy in their intended secure state every time, eliminating configuration drift and manual misconfiguration. The templates are organized as numbered layers (`01-logging.yaml` → `02-iam-baseline.yaml` → `03-encryption.yaml`) that build on one another — Layer 3's KMS key, for example, is exported and adopted by Layer 1's CloudTrail log bucket. Each template is auditable documentation of the intended secure state.
 
 ### Defense in Depth
 
@@ -233,24 +256,53 @@ Example output:
 ------------------------------------------------------
 ```
 
-### Step 3: Deploy CloudFormation Stack
+### Step 3: Deploy the CloudFormation Layers
+
+Deploy the numbered templates in order — each layer builds on the previous. All three layers create IAM resources, so `CAPABILITY_NAMED_IAM` is required. (`secure-bucket.yaml` is a standalone foundational template and can be deployed independently.)
+
+**Layer 1 — Logging & Monitoring.** Leave `LogsBucketCmkArn` unset for now; the CloudTrail log bucket uses SSE-S3 until the Layer 3 CMK exists.
 
 ```
 aws cloudformation deploy \
-    --stack-name <STACK_NAME> \
-    --template-file <STACK_FILENAME.yaml> \
-    --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
-    --parameter-overrides \
-        OrganizationId=<YOUR_ORG_ID> \
-        OrgRootId=<ORG_ROOT_ID>
+    --stack-name compliance-layer1-logging \
+    --template-file cloudformation/01-logging.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides DefaultVpcId=<DEFAULT_VPC_ID>
 ```
 
-Example output:
+**Layer 2 — IAM Baseline.** Supply a long random `AdminRoleExternalId`.
 
 ```
-Waiting for changeset to be created..
-Waiting for stack create/update to complete
-Successfully created/updated stack - <BUCKET_NAME>
+aws cloudformation deploy \
+    --stack-name compliance-layer2-iam \
+    --template-file cloudformation/02-iam-baseline.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides AdminRoleExternalId=<LONG_RANDOM_STRING>
+```
+
+**Layer 3 — Encryption.** Pass the Layer 2 admin role ARN as the key administrator.
+
+```
+aws cloudformation deploy \
+    --stack-name compliance-layer3-encryption \
+    --template-file cloudformation/03-encryption.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides KeyAdministratorRoleArn=$(aws cloudformation describe-stacks \
+        --stack-name compliance-layer2-iam \
+        --query "Stacks[0].Outputs[?OutputKey=='AdminRoleArn'].OutputValue" --output text)
+```
+
+**Second pass — wire the CMK into Layer 1.** Re-deploy Layer 1 with the Layer 3 CMK ARN to switch the CloudTrail log bucket to SSE-KMS (agency-managed key). This two-pass step breaks the cycle: Layer 1 is numbered first but its encryption key is created in Layer 3.
+
+```
+aws cloudformation deploy \
+    --stack-name compliance-layer1-logging \
+    --template-file cloudformation/01-logging.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides DefaultVpcId=<DEFAULT_VPC_ID> \
+        LogsBucketCmkArn=$(aws cloudformation describe-stacks \
+        --stack-name compliance-layer3-encryption \
+        --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
 **Verify deployment:**
