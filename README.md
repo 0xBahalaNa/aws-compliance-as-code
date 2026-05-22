@@ -222,7 +222,7 @@ Example output:
 |------------------------------|--------------|
 |  SCP-DenyRootUserActions     |  p-1a2b3c4d  |
 |  SCP-DenyAuditLogDeletion    |  p-5e6f7g8h  |
-|  SCP-PreventOpenSSH          |  p-9j0k1l2m  |
+|  SCP-RestrictNetworkChanges  |  p-9j0k1l2m  |
 ----------------------------------------------
 ```
 
@@ -280,16 +280,18 @@ aws cloudformation deploy \
     --parameter-overrides AdminRoleExternalId=<LONG_RANDOM_STRING>
 ```
 
-**Layer 3 — Encryption.** Pass the Layer 2 admin role ARN as the key administrator.
+**Layer 3 — Encryption.** Pass the Layer 2 admin role as key administrator and the Layer 2 auditor role as key user (so it can decrypt CloudTrail logs for evidence collection).
 
 ```
 aws cloudformation deploy \
     --stack-name compliance-layer3-encryption \
     --template-file cloudformation/03-encryption.yaml \
     --capabilities CAPABILITY_NAMED_IAM \
-    --parameter-overrides KeyAdministratorRoleArn=$(aws cloudformation describe-stacks \
-        --stack-name compliance-layer2-iam \
-        --query "Stacks[0].Outputs[?OutputKey=='AdminRoleArn'].OutputValue" --output text)
+    --parameter-overrides \
+        KeyAdministratorRoleArn=$(aws cloudformation describe-stacks --stack-name compliance-layer2-iam \
+            --query "Stacks[0].Outputs[?OutputKey=='AdminRoleArn'].OutputValue" --output text) \
+        KeyUserRoleArns=$(aws cloudformation describe-stacks --stack-name compliance-layer2-iam \
+            --query "Stacks[0].Outputs[?OutputKey=='AuditorRoleArn'].OutputValue" --output text)
 ```
 
 **Second pass — wire the CMK into Layer 1.** Re-deploy Layer 1 with the Layer 3 CMK ARN to switch the CloudTrail log bucket to SSE-KMS (agency-managed key). This two-pass step breaks the cycle: Layer 1 is numbered first but its encryption key is created in Layer 3.
@@ -329,7 +331,7 @@ aws organizations update-policy \
 aws cloudformation deploy \
     --stack-name <STACK_NAME> \
     --template-file <STACK_FILENAME>.yaml \
-    --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
+    --capabilities CAPABILITY_NAMED_IAM
 ```
 
 ### Resource Cleanup
@@ -367,7 +369,7 @@ aws cloudformation delete-stack \
 
 This project demonstrates the core GRC Engineering skill of translating compliance framework requirements into enforceable AWS controls. It showcases hands-on experience with AWS Organizations policy design, SCP authoring with condition-based logic, CloudFormation template development, and compliance framework mapping across CJIS Security Policy, FedRAMP, and NIST 800-53. The inclusion of CJIS and FedRAMP mappings reflects relevance to criminal justice environments and federal cloud authorization requirements.
 
-The controls were selected to illustrate a range of enforcement patterns, from broad service restrictions (`ec2:*` deny) to condition-based rules (SSH port + CIDR + region matching) to encryption mandates, demonstrating the flexibility of SCPs as a compliance enforcement mechanism.
+The controls illustrate a range of enforcement patterns — action-scoped denials (CloudTrail log deletion), principal-scoped denials (root-user lockdown via `NotAction` plus an `aws:PrincipalArn` condition), region-conditioned rules (network changes confined to approved regions), and encryption mandates (S3 uploads required to use SSE-KMS) — alongside a layered, compliant-by-default CloudFormation baseline. Together they demonstrate the flexibility of SCPs and infrastructure-as-code as compliance enforcement mechanisms.
 
 This foundation positions the project for expansion into CI/CD pipeline guardrails, AWS Config rules for continuous compliance monitoring, drift remediation automation, and multi-account architectures with OU-scoped policies.
 

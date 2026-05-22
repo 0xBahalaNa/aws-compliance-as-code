@@ -11,14 +11,24 @@ Description: >-
 Parameters:
   KeyAdministratorRoleArn:
     Type: String
-    AllowedPattern: "arn:aws:iam::[0-9]{12}:role/.+"
-    ConstraintDescription: Must be a full IAM role ARN (arn:aws:iam::<account>:role/<name>).
+    AllowedPattern: "arn:aws[a-z-]*:iam::[0-9]{12}:role/.+"
+    ConstraintDescription: Must be a full IAM role ARN, e.g. arn:aws:iam::<account>:role/<name> (aws-us-gov and aws-cn partitions also accepted).
     Description: >-
       ARN of the IAM role designated to ADMINISTER the CMK. Use the Layer 2
       admin role: <iam-baseline-stack-name>-admin. This role manages the key
       but the Layer 2 AdminPermissionsBoundary still denies ScheduleKeyDeletion
       / DisableKey / DeleteAlias, so it cannot destroy the key. No default -
       the key administrator must be set explicitly on every deploy.
+
+  KeyUserRoleArns:
+    Type: CommaDelimitedList
+    Description: >-
+      Comma-separated IAM role ARNs that need to USE the CMK to read data
+      encrypted under it - at minimum the Layer 2 auditor role
+      (<iam-baseline-stack-name>-auditor), which reads CloudTrail log objects
+      from the SSE-KMS bucket for evidence collection. Granted Decrypt and
+      DescribeKey only - read-only key usage (AC-6). No default - list the
+      reader role(s) explicitly.
 
   KeyAliasName:
     Type: String
@@ -140,6 +150,23 @@ Resources:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
 
+          # Statement 4 - designated KEY USERS. The roles that need to READ
+          # data encrypted under the CMK - chiefly the Layer 2 auditor role,
+          # which reads CloudTrail log objects from the SSE-KMS bucket for
+          # evidence collection. Without this, s3:GetObject on an encrypted
+          # log file fails: S3 calls kms:Decrypt as the auditor, whose AWS
+          # managed policies (ReadOnlyAccess / SecurityAudit) do not include
+          # it, and Statement 1 only delegates to IAM. Scoped to Decrypt +
+          # DescribeKey - read-only key usage, no GenerateDataKey (AC-6).
+          - Sid: AllowKeyUsage
+            Effect: Allow
+            Principal:
+              AWS: !Ref KeyUserRoleArns
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: "*"
+
   # Alias = a stable, human-readable handle for the key. Templates and callers
   # reference alias/... so the underlying key can be replaced without
   # rewriting every reference.
@@ -154,8 +181,8 @@ Resources:
   # password policy). The pattern: a Lambda-backed custom resource that
   # translates CFN Create / Update / Delete events into EC2 API calls.
   #
-  # Execution role - least privilege: basic Lambda logging plus exactly the
-  # five EBS-encryption verbs.
+  # Execution role - least privilege: basic Lambda logging plus the two
+  # EBS-encryption verbs the handler actually calls.
   EbsEncryptionLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -179,10 +206,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - ec2:EnableEbsEncryptionByDefault
-                  - ec2:GetEbsEncryptionByDefault
                   - ec2:ModifyEbsDefaultKmsKeyId
-                  - ec2:GetEbsDefaultKmsKeyId
-                  - ec2:ResetEbsDefaultKmsKeyId
                 Resource: "*"
 
   EbsEncryptionLambda:
@@ -219,11 +243,13 @@ Resources:
                       # the AWS-managed aws/ebs key (SC-12).
                       ec2.modify_ebs_default_kms_key_id(KmsKeyId=props['CmkArn'])
                   elif request_type == 'Delete':
-                      # Do NOT disable encryption-by-default on teardown - that
-                      # is a security regression. Only reset the default key to
-                      # the AWS-managed aws/ebs key, so new volumes stay
-                      # encrypted and nothing points at a CMK pending deletion.
-                      ec2.reset_ebs_default_kms_key_id()
+                      # No-op. The CMK has DeletionPolicy: Retain, so it
+                      # survives stack teardown and the account EBS default
+                      # can safely keep referencing it. Resetting to the
+                      # AWS-managed aws/ebs key here would be a silent CJIS
+                      # 5.10.1.2 regression; decommissioning the CMK is a
+                      # deliberate, separate action.
+                      pass
                   cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, PHYSICAL_ID)
               except Exception as e:
                   cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)}, PHYSICAL_ID)
