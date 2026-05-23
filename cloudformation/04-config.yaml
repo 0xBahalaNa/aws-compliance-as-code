@@ -1,0 +1,465 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Layer 4 - Configuration & Compliance. Enables AWS Config (configuration
+  recorder + delivery channel + dedicated S3 bucket encrypted with the Layer 3
+  CMK) and deploys six managed Config Rules that continuously verify the
+  baselines established in Layers 1-3: multi-region CloudTrail, S3 default
+  encryption (both the lax SSE-S3-OR-KMS check and the strict SSE-KMS check),
+  the account password policy, encrypted EBS volumes, and the SSH-port
+  restriction. Where CloudTrail captures "who called the API," Config captures
+  "what does every resource currently look like" - the state half of the
+  evidence story. The recorder, channel, bucket, and role are CONDITIONAL on
+  the ManageConfigService parameter: pass UseExisting when the account already
+  has AWS Config enabled in this region (Control Tower, console-onboarding,
+  another stack) and only the rules are created, evaluating against the
+  existing recorder. Satisfies NIST 800-53 Rev 5 CM-2, CM-6, CM-8; CJIS v6.0
+  5.10.4.1.
+
+Parameters:
+  ConfigCmkArn:
+    Type: String
+    AllowedPattern: "arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/.+"
+    ConstraintDescription: Must be a full KMS key ARN.
+    Description: >-
+      ARN of the Layer 3 compliance CMK (03-encryption.yaml output
+      ComplianceCmkArn). Encrypts the Config delivery bucket with the
+      agency-managed key (SC-28 / CJIS 5.10.1.2). The CMK MUST be in the
+      same AWS region as this stack: S3 SSE-KMS requires a same-region key,
+      so passing a cross-region ARN fails bucket creation with
+      KMS.NotFoundException. Required even when ManageConfigService=
+      UseExisting (the value is unused in that mode but CFN still requires
+      it to satisfy the AllowedPattern - pass any agency CMK ARN).
+
+  ManageConfigService:
+    Type: String
+    Default: Provision
+    AllowedValues:
+      - Provision
+      - UseExisting
+    Description: >-
+      Whether to create the ConfigurationRecorder, DeliveryChannel, recorder
+      role, and delivery bucket. AWS Config allows exactly ONE recorder and
+      ONE delivery channel per region per account; attempting Provision in an
+      account that already has Config enabled (Control Tower, Security Hub
+      auto-enable, prior stack, console-onboarding) raises
+      MaxNumberOfConfigurationRecordersExceededException. Pass UseExisting in
+      that case and only the rules are created - they evaluate against the
+      existing recorder, regardless of where it was provisioned.
+
+  ConfigSnapshotDeliveryFrequency:
+    Type: String
+    Default: Twelve_Hours
+    AllowedValues:
+      - One_Hour
+      - Three_Hours
+      - Six_Hours
+      - Twelve_Hours
+      - TwentyFour_Hours
+    Description: >-
+      Cadence at which Config delivers a full configuration snapshot to the
+      S3 bucket. Change events are recorded continuously regardless; this
+      controls only the periodic snapshot.
+
+  ConfigBucketObjectLockDays:
+    Type: Number
+    Default: 365
+    MinValue: 1
+    Description: >-
+      Object Lock retention applied in COMPLIANCE mode to every object in the
+      Config bucket. Matches Layer 1's CloudTrail-bucket pattern: even the
+      root user cannot shorten or delete objects within the retention window
+      (AU-9 / CM-8 evidence integrity). 365 is the FedRAMP High AU-11 floor.
+
+  PasswordPolicyMinLength:
+    Type: Number
+    Default: 14
+    MinValue: 14
+    MaxValue: 128
+    Description: >-
+      Minimum password length the iam-password-policy Config rule asserts.
+      Floor is 14 to match Layer 2's PasswordPolicyLambda floor - the two
+      layers cannot diverge below the FedRAMP High / CJIS AAL2 baseline
+      without a coordinated change in both templates.
+
+  PasswordPolicyMaxAge:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 1095
+    Description: >-
+      Maximum password age (days) the iam-password-policy Config rule
+      asserts. Match Layer 2's MaxPasswordAgeInDays (default 90).
+
+  PasswordPolicyReusePrevention:
+    Type: Number
+    Default: 24
+    MinValue: 1
+    MaxValue: 24
+    Description: >-
+      Password reuse-prevention count the iam-password-policy Config rule
+      asserts. Match Layer 2 (default 24).
+
+  PasswordPolicyRequireUppercase:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether the iam-password-policy rule asserts uppercase required.
+      Mirror the Layer 2 PasswordPolicy RequireUppercaseCharacters value so
+      the rule does not report NON_COMPLIANT against a policy Layer 2
+      legitimately applied, and cannot silently certify a weaker policy.
+
+  PasswordPolicyRequireLowercase:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether the iam-password-policy rule asserts lowercase required.
+      Mirror Layer 2's RequireLowercaseCharacters.
+
+  PasswordPolicyRequireSymbols:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether the iam-password-policy rule asserts symbols required.
+      Mirror Layer 2's RequireSymbols.
+
+  PasswordPolicyRequireNumbers:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether the iam-password-policy rule asserts numbers required.
+      Mirror Layer 2's RequireNumbers.
+
+Conditions:
+  # Whether this stack provisions the Config recorder, channel, role, and
+  # bucket. Set to UseExisting when Config is already enabled in the region
+  # to deploy only the rules, which then evaluate against the existing
+  # recorder.
+  ProvisionConfigService: !Equals [!Ref ManageConfigService, "Provision"]
+
+Resources:
+
+  # S3 bucket holding Config snapshots, configuration history, and delivery
+  # records. Same hardening as the Layer 1 CloudTrail bucket: Object Lock
+  # COMPLIANCE mode for immutability (the configuration history IS the CM-8
+  # inventory record, equivalent to AU-9 evidence), versioning, SSE-KMS with
+  # the agency-managed CMK, all public access blocked, DeletionPolicy Retain
+  # to outlive a stack teardown. Bucket name includes the region so the
+  # stack can be deployed in multiple regions without name collisions.
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Condition: ProvisionConfigService
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "aws-config-${AWS::Region}-${AWS::AccountId}"
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            # COMPLIANCE mode: even the root account cannot shorten or
+            # delete an object within the retention window. This is what
+            # turns the bucket into immutable evidence storage.
+            Mode: COMPLIANCE
+            Days: !Ref ConfigBucketObjectLockDays
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref ConfigCmkArn
+            # S3 Bucket Keys: one bucket-level key for envelope encryption
+            # cuts KMS API calls per object - the same cost win Layer 1's
+            # CloudTrail bucket takes after the second-pass deploy.
+            BucketKeyEnabled: true
+      VersioningConfiguration:
+        # Required for Object Lock; preserves prior versions of any
+        # accidentally-overwritten delivery object.
+        Status: Enabled
+
+  # Bucket policy: lets the Config service write delivery objects under the
+  # AWSLogs/<account>/Config/ prefix, denies bucket-wide object deletion
+  # (any object in the bucket - matching Layer 1's pattern, not just the
+  # delivery prefix), and denies any unencrypted access. No x-amz-acl
+  # condition: new S3 buckets default to BucketOwnerEnforced (April 2023+)
+  # which rejects any request carrying an ACL header, and AWS Config has
+  # been updated to omit the header for those buckets. Authorization
+  # relies on the bucket-policy grant + aws:SourceAccount confused-deputy
+  # guard.
+  ConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: ProvisionConfigService
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowConfigGetBucketAcl
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt ConfigBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowConfigListBucket
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: s3:ListBucket
+            Resource: !GetAtt ConfigBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowConfigPutObject
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: DenyObjectDeletion
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:DeleteObject
+              - s3:DeleteObjectVersion
+            Resource: !Sub "${ConfigBucket.Arn}/*"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt ConfigBucket.Arn
+              - !Sub "${ConfigBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # IAM role the Config recorder assumes. AWS-managed AWS_ConfigRole for
+  # cross-service reads + an inline policy for delivery-bucket writes and
+  # KMS access on the CMK. The trust policy adds aws:SourceAccount as a
+  # confused-deputy guard for the service-principal grant - the same
+  # pattern the bucket policy uses.
+  ConfigRecorderRole:
+    Type: AWS::IAM::Role
+    Condition: ProvisionConfigService
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWS_ConfigRole
+      Policies:
+        - PolicyName: ConfigDeliveryAndEncryption
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteDeliveryObjects
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*"
+              - Sid: ReadBucketMetadata
+                Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:ListBucket
+                Resource: !GetAtt ConfigBucket.Arn
+              - Sid: EncryptDeliveryObjectsWithCmk
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !Ref ConfigCmkArn
+
+  # The configuration recorder. RecordingGroup.AllSupported with
+  # IncludeGlobalResourceTypes is the CM-8 inventory engine. One recorder
+  # per region per account is the AWS limit - if Config is already enabled
+  # in this region, set ManageConfigService=UseExisting at the parameter
+  # level to skip provisioning. Stack-name-prefixed Name avoids coincidental
+  # collision with the "default" name used by console / Control Tower.
+  ConfigRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Condition: ProvisionConfigService
+    Properties:
+      Name: !Sub "${AWS::StackName}-recorder"
+      RoleARN: !GetAtt ConfigRecorderRole.Arn
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: true
+
+  # The delivery channel sends snapshots to the bucket. ORDERING: Config
+  # does not start recording until a delivery channel exists, AND the
+  # channel validates write access to the bucket on creation. DependsOn
+  # must cover BOTH the recorder (so the recorder exists when the channel
+  # is wired) AND the bucket policy (so the channel's write-access
+  # validation passes - the implicit !Ref-on-bucket dependency alone does
+  # not guarantee the policy is attached yet).
+  ConfigDeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    Condition: ProvisionConfigService
+    DependsOn:
+      - ConfigRecorder
+      - ConfigBucketPolicy
+    Properties:
+      Name: !Sub "${AWS::StackName}-channel"
+      S3BucketName: !Ref ConfigBucket
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency: !Ref ConfigSnapshotDeliveryFrequency
+
+  # ---------------------------------------------------------------------
+  # Config Rules - each verifies a Layer 1-3 baseline. No DependsOn on
+  # the recorder/channel: rules can be created standalone and evaluate
+  # against whatever recorder is running in the region (this stack's, or
+  # a pre-existing one when ManageConfigService=UseExisting). Periodic
+  # rules set MaximumExecutionFrequency: One_Hour for tight detection -
+  # the default is TwentyFour_Hours, which would leave a full-day blind
+  # spot on the trail / password-policy checks.
+  # ---------------------------------------------------------------------
+
+  # Verifies Layer 1: at least one multi-region trail is enabled and is
+  # logging. Periodic rule.
+  MultiRegionCloudTrailRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: multi-region-cloudtrail-enabled
+      Description: Verifies at least one multi-region CloudTrail is enabled (CM-6, Layer 1).
+      MaximumExecutionFrequency: One_Hour
+      Source:
+        Owner: AWS
+        SourceIdentifier: MULTI_REGION_CLOUD_TRAIL_ENABLED
+
+  # Verifies S3 buckets have SOME default encryption enabled (SSE-S3 or
+  # SSE-KMS). Lax check - passes on AWS-managed AES256 too. Paired with
+  # the strict S3KmsEncryptionRule below for the CJIS agency-managed-key
+  # story.
+  S3EncryptionEnabledRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: s3-bucket-server-side-encryption-enabled
+      Description: Verifies S3 buckets have default encryption enabled (CM-6, lax check).
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_BUCKET_SERVER_SIDE_ENCRYPTION_ENABLED
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::S3::Bucket
+
+  # Strict CJIS check: S3 buckets must use SSE-KMS (not SSE-S3 / AES256).
+  # The AWS-managed aws/s3 key does not satisfy CJIS 5.10.1.2's
+  # agency-managed-key requirement; this rule surfaces any bucket relying
+  # on it. The secure-bucket.yaml legacy template and the pre-second-pass
+  # Layer 1 bucket will report NON_COMPLIANT here - that is the intended
+  # signal.
+  S3KmsEncryptionRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: s3-default-encryption-kms
+      Description: Verifies S3 buckets default to SSE-KMS (CJIS 5.10.1.2 - agency-managed key).
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_DEFAULT_ENCRYPTION_KMS
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::S3::Bucket
+
+  # Verifies Layer 2: account password policy meets the baseline. Periodic.
+  # InputParameters mirror Layer 2's PasswordPolicy custom resource via
+  # template parameters so a future toggle in Layer 2 either gets reflected
+  # here at the same time (coordinated change) or surfaces a Config
+  # NON_COMPLIANT - never a silent drift.
+  IamPasswordPolicyRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: iam-password-policy
+      Description: Verifies the account password policy matches the Layer 2 baseline (CM-6 / IA-5).
+      MaximumExecutionFrequency: One_Hour
+      Source:
+        Owner: AWS
+        SourceIdentifier: IAM_PASSWORD_POLICY
+      # InputParameters is a JSON-encoded STRING built inline with !Sub.
+      InputParameters: !Sub |
+        {
+          "RequireUppercaseCharacters": "${PasswordPolicyRequireUppercase}",
+          "RequireLowercaseCharacters": "${PasswordPolicyRequireLowercase}",
+          "RequireSymbols": "${PasswordPolicyRequireSymbols}",
+          "RequireNumbers": "${PasswordPolicyRequireNumbers}",
+          "MinimumPasswordLength": "${PasswordPolicyMinLength}",
+          "PasswordReusePrevention": "${PasswordPolicyReusePrevention}",
+          "MaxPasswordAge": "${PasswordPolicyMaxAge}"
+        }
+
+  # Verifies Layer 3: attached EBS volumes are encrypted. Change-triggered.
+  EncryptedVolumesRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: encrypted-volumes
+      Description: Verifies attached EBS volumes are encrypted (CM-6 / SC-28, Layer 3).
+      Source:
+        Owner: AWS
+        SourceIdentifier: ENCRYPTED_VOLUMES
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::EC2::Volume
+
+  # Boundary-protection: no security group allows unrestricted SSH
+  # (0.0.0.0/0 on port 22). Change-triggered.
+  RestrictedSshRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: restricted-ssh
+      Description: Verifies security groups do not allow unrestricted SSH (SC-7 / CM-6).
+      Source:
+        Owner: AWS
+        SourceIdentifier: INCOMING_SSH_DISABLED
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::EC2::SecurityGroup
+
+Outputs:
+  ConfigBucketName:
+    Condition: ProvisionConfigService
+    Description: S3 bucket holding Config delivery-channel snapshots and configuration history.
+    Value: !Ref ConfigBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigBucketName"
+
+  ConfigBucketArn:
+    Condition: ProvisionConfigService
+    Description: ARN of the Config delivery-channel bucket.
+    Value: !GetAtt ConfigBucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigBucketArn"
+
+  ConfigRecorderName:
+    Condition: ProvisionConfigService
+    Description: Name of the configuration recorder.
+    Value: !Ref ConfigRecorder
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigRecorderName"
+
+  ConfigRecorderRoleArn:
+    Condition: ProvisionConfigService
+    Description: ARN of the IAM role the configuration recorder assumes.
+    Value: !GetAtt ConfigRecorderRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigRecorderRoleArn"
