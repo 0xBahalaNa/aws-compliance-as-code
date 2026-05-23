@@ -27,11 +27,13 @@ graph TD
     ACC --> L1["Layer 1 (01-logging.yaml)<br/>CloudTrail + Object Lock S3 + VPC Flow Logs"]
     ACC --> L2["Layer 2 (02-iam-baseline.yaml)<br/>Password Policy + Auditor and Admin Roles"]
     ACC --> L3["Layer 3 (03-encryption.yaml)<br/>KMS CMK + EBS Default Encryption"]
+    ACC --> L4["Layer 4 (04-config.yaml)<br/>Config Recorder + Compliance Rules"]
     ACC --> SB["secure-bucket.yaml<br/>Secure S3 Bucket"]
     L3 -. exports CMK ARN .-> L1
+    L3 -. exports CMK ARN .-> L4
 ```
 
-SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into member accounts as numbered layers (`01` → `02` → `03`), each building on the previous, to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
+SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into member accounts as numbered layers (`01` → `02` → `03` → `04`), each building on the previous, to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
 
 ## Compliance Frameworks
 
@@ -59,6 +61,7 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 | Layer 1 — Logging and Monitoring | `cloudformation/01-logging.yaml` | CloudFormation (IaC) | Multi-region CloudTrail, an Object Lock (COMPLIANCE mode) log bucket, a CloudWatch log group, and VPC Flow Logs | Audit and Accountability |
 | Layer 2 — IAM Baseline | `cloudformation/02-iam-baseline.yaml` | CloudFormation (IaC) | Account password policy, a read-only auditor role, and an MFA + ExternalId admin role capped by a permissions boundary | Identity and Least Privilege |
 | Layer 3 — Encryption | `cloudformation/03-encryption.yaml` | CloudFormation (IaC) | Customer-managed KMS CMK with annual rotation, a separated key policy, and account-level EBS encryption-by-default | Data Protection at Rest |
+| Layer 4 — Configuration & Compliance | `cloudformation/04-config.yaml` | CloudFormation (IaC) | AWS Config recorder + delivery channel + dedicated SSE-KMS bucket, plus five managed Config Rules continuously validating Layers 1–3 | Continuous Compliance Monitoring |
 | Secure S3 Bucket | `cloudformation/secure-bucket.yaml` | CloudFormation (IaC) | An S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
 
 ## Compliance Framework Mapping
@@ -75,6 +78,7 @@ Each control was selected to address specific compliance requirements across CJI
 | Layer 1 — Logging and Monitoring | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9, AU-12 | AU-2 (L/M/H), AU-3 (L/M/H), AU-9 (L/M/H), AU-12 (L/M/H) | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) |
 | Layer 2 — IAM Baseline | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), IA-5 (Authenticator Management) | AC-2 (L/M/H), AC-3 (L/M/H), AC-6 (M/H), IA-5 (L/M/H) | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), IA-5 (Authenticator Management) |
 | Layer 3 — Encryption | SC-12 (Cryptographic Key Management), SC-13 (Cryptographic Protection), SC-28, SC-28(1) | SC-12 (L/M/H), SC-13 (L/M/H), SC-28 (M/H), SC-28(1) (M/H) | SC-12 (Cryptographic Key Establishment and Management), SC-13 (Cryptographic Protection), SC-28 (Protection of Information at Rest), SC-28(1) (Cryptographic Protection) |
+| Layer 4 — Configuration & Compliance | CM-2 (Baseline Configuration), CM-6 (Configuration Settings), CM-8 (System Component Inventory) | CM-2 (L/M/H), CM-6 (L/M/H), CM-8 (L/M/H) | CM-2 (Baseline Configuration), CM-6 (Configuration Settings), CM-8 (System Component Inventory) |
 | Secure S3 Bucket | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) | SC-28 (M/H), AC-3 (L/M/H) | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) |
 
 > **Note:** CJIS v6.0 now uses NIST 800-53 control identifiers directly, so the CJIS and NIST columns share the same control IDs. The distinction is that CJIS scopes these requirements specifically to Criminal Justice Information (CJI), while NIST 800-53 applies broadly to federal information systems.
@@ -89,6 +93,7 @@ aws-compliance-as-code/
 │   ├── 01-logging.yaml                 # Layer 1: CloudTrail + Object Lock S3 + CloudWatch + VPC Flow Logs
 │   ├── 02-iam-baseline.yaml            # Layer 2: IAM password policy + auditor/admin roles
 │   ├── 03-encryption.yaml              # Layer 3: KMS CMK + alias + EBS encryption-by-default
+│   ├── 04-config.yaml                  # Layer 4: AWS Config recorder + delivery channel + 5 managed rules
 │   └── secure-bucket.yaml              # Standalone: secure S3 bucket (public access block + AES256)
 ├── scps/
 │   ├── scp-deny-audit-log-deletion.json            # SCP: Deny CloudTrail DeleteTrail / StopLogging
@@ -100,7 +105,7 @@ aws-compliance-as-code/
 └── README.md
 ```
 
-The numbered CloudFormation prefixes (`01`–`03`) indicate deployment order; each layer builds on the one before it.
+The numbered CloudFormation prefixes (`01`–`04`) indicate deployment order; each layer builds on the one before it.
 
 ## AWS Services Used
 
@@ -111,6 +116,7 @@ The numbered CloudFormation prefixes (`01`–`03`) indicate deployment order; ea
 - **[AWS IAM](https://aws.amazon.com/iam/)**: Password policy, scoped roles, and permissions boundary (Layer 2)
 - **[Amazon S3](https://aws.amazon.com/s3/)**: Object Lock log storage and the secure bucket baseline
 - **[Amazon EBS](https://aws.amazon.com/ebs/)**: Account-level encryption-by-default for new volumes (Layer 3)
+- **[AWS Config](https://aws.amazon.com/config/)**: Continuous configuration recording + five managed Config Rules for compliance evaluation (Layer 4)
 - **[Amazon CloudWatch Logs](https://aws.amazon.com/cloudwatch/)**: Hot, queryable copy of CloudTrail and VPC Flow Log events
 - **[AWS Lambda](https://aws.amazon.com/lambda/)**: Backs the custom resources for account settings with no native CloudFormation type
 - **[AWS CLI](https://aws.amazon.com/cli/)**: Interface for deploying SCPs and CloudFormation stacks
@@ -123,7 +129,7 @@ SCPs are attached at the Organization Root and act as permission boundaries that
 
 ### CloudFormation (Compliant by Default)
 
-CloudFormation templates encode security requirements directly into resource definitions, so resources deploy in their intended secure state every time, eliminating configuration drift and manual misconfiguration. The templates are organized as numbered layers (`01-logging.yaml` → `02-iam-baseline.yaml` → `03-encryption.yaml`) that build on one another — Layer 3's KMS key, for example, is exported and adopted by Layer 1's CloudTrail log bucket. Each template is auditable documentation of the intended secure state.
+CloudFormation templates encode security requirements directly into resource definitions, so resources deploy in their intended secure state every time, eliminating configuration drift and manual misconfiguration. The templates are organized as numbered layers (`01-logging.yaml` → `02-iam-baseline.yaml` → `03-encryption.yaml` → `04-config.yaml`) that build on one another — Layer 3's KMS key, for example, is exported and adopted by both Layer 1's CloudTrail log bucket and Layer 4's Config delivery-channel bucket; Layer 4's managed Config Rules then continuously verify that Layers 1–3 stay compliant. Each template is auditable documentation of the intended secure state.
 
 ### Defense in Depth
 
@@ -304,6 +310,17 @@ aws cloudformation deploy \
     --parameter-overrides DefaultVpcId=<DEFAULT_VPC_ID> \
         LogsBucketCmkArn=$(aws cloudformation describe-stacks \
         --stack-name compliance-layer3-encryption \
+        --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
+```
+
+**Layer 4 — Configuration & Compliance.** Pass the Layer 3 CMK ARN as the bucket encryption key. Deploy this after the Layer 1 second pass so the Config rules evaluate against the final SSE-KMS state.
+
+```
+aws cloudformation deploy \
+    --stack-name compliance-layer4-config \
+    --template-file cloudformation/04-config.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides ConfigCmkArn=$(aws cloudformation describe-stacks --stack-name compliance-layer3-encryption \
         --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
