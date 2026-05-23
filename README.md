@@ -61,7 +61,7 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 | Layer 1 — Logging and Monitoring | `cloudformation/01-logging.yaml` | CloudFormation (IaC) | Multi-region CloudTrail, an Object Lock (COMPLIANCE mode) log bucket, a CloudWatch log group, and VPC Flow Logs | Audit and Accountability |
 | Layer 2 — IAM Baseline | `cloudformation/02-iam-baseline.yaml` | CloudFormation (IaC) | Account password policy, a read-only auditor role, and an MFA + ExternalId admin role capped by a permissions boundary | Identity and Least Privilege |
 | Layer 3 — Encryption | `cloudformation/03-encryption.yaml` | CloudFormation (IaC) | Customer-managed KMS CMK with annual rotation, a separated key policy, and account-level EBS encryption-by-default | Data Protection at Rest |
-| Layer 4 — Configuration & Compliance | `cloudformation/04-config.yaml` | CloudFormation (IaC) | AWS Config recorder + delivery channel + dedicated SSE-KMS bucket, plus five managed Config Rules continuously validating Layers 1–3 | Continuous Compliance Monitoring |
+| Layer 4 — Configuration & Compliance | `cloudformation/04-config.yaml` | CloudFormation (IaC) | AWS Config recorder + delivery channel + dedicated SSE-KMS Object-Lock bucket, plus six managed Config Rules continuously validating Layers 1–3 | Continuous Compliance Monitoring |
 | Secure S3 Bucket | `cloudformation/secure-bucket.yaml` | CloudFormation (IaC) | An S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
 
 ## Compliance Framework Mapping
@@ -93,7 +93,7 @@ aws-compliance-as-code/
 │   ├── 01-logging.yaml                 # Layer 1: CloudTrail + Object Lock S3 + CloudWatch + VPC Flow Logs
 │   ├── 02-iam-baseline.yaml            # Layer 2: IAM password policy + auditor/admin roles
 │   ├── 03-encryption.yaml              # Layer 3: KMS CMK + alias + EBS encryption-by-default
-│   ├── 04-config.yaml                  # Layer 4: AWS Config recorder + delivery channel + 5 managed rules
+│   ├── 04-config.yaml                  # Layer 4: AWS Config recorder + delivery channel + 6 managed rules
 │   └── secure-bucket.yaml              # Standalone: secure S3 bucket (public access block + AES256)
 ├── scps/
 │   ├── scp-deny-audit-log-deletion.json            # SCP: Deny CloudTrail DeleteTrail / StopLogging
@@ -116,7 +116,7 @@ The numbered CloudFormation prefixes (`01`–`04`) indicate deployment order; ea
 - **[AWS IAM](https://aws.amazon.com/iam/)**: Password policy, scoped roles, and permissions boundary (Layer 2)
 - **[Amazon S3](https://aws.amazon.com/s3/)**: Object Lock log storage and the secure bucket baseline
 - **[Amazon EBS](https://aws.amazon.com/ebs/)**: Account-level encryption-by-default for new volumes (Layer 3)
-- **[AWS Config](https://aws.amazon.com/config/)**: Continuous configuration recording + five managed Config Rules for compliance evaluation (Layer 4)
+- **[AWS Config](https://aws.amazon.com/config/)**: Continuous configuration recording + six managed Config Rules for compliance evaluation (Layer 4)
 - **[Amazon CloudWatch Logs](https://aws.amazon.com/cloudwatch/)**: Hot, queryable copy of CloudTrail and VPC Flow Log events
 - **[AWS Lambda](https://aws.amazon.com/lambda/)**: Backs the custom resources for account settings with no native CloudFormation type
 - **[AWS CLI](https://aws.amazon.com/cli/)**: Interface for deploying SCPs and CloudFormation stacks
@@ -264,7 +264,7 @@ Example output:
 
 ### Step 3: Deploy the CloudFormation Layers
 
-Deploy the numbered templates in order — each layer builds on the previous. All three layers create IAM resources, so `CAPABILITY_NAMED_IAM` is required. (`secure-bucket.yaml` is a standalone foundational template and can be deployed independently.)
+Deploy the numbered templates in order — each layer builds on the previous. All four layers create IAM resources, so `CAPABILITY_NAMED_IAM` is required (the flag covers both named and unnamed roles). (`secure-bucket.yaml` is a standalone foundational template and can be deployed independently.)
 
 **Layer 1 — Logging & Monitoring.** Leave `LogsBucketCmkArn` unset for now; the CloudTrail log bucket uses SSE-S3 until the Layer 3 CMK exists.
 
@@ -313,7 +313,7 @@ aws cloudformation deploy \
         --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
-**Layer 4 — Configuration & Compliance.** Pass the Layer 3 CMK ARN as the bucket encryption key. Deploy this after the Layer 1 second pass so the Config rules evaluate against the final SSE-KMS state.
+**Layer 4 — Configuration & Compliance.** Pass the Layer 3 CMK ARN; the CMK and the Config bucket must be in the same region. Deploy after the Layer 1 second pass so the rules evaluate against the final SSE-KMS state. **If the account already has AWS Config enabled in this region** (Control Tower, console-onboarding, or a prior stack), add `ManageConfigService=UseExisting` to the overrides — the stack then creates only the six Config Rules, which evaluate against the existing recorder.
 
 ```
 aws cloudformation deploy \
@@ -388,7 +388,7 @@ This project demonstrates the core GRC Engineering skill of translating complian
 
 The controls illustrate a range of enforcement patterns — action-scoped denials (CloudTrail log deletion), principal-scoped denials (root-user lockdown via `NotAction` plus an `aws:PrincipalArn` condition), region-conditioned rules (network changes confined to approved regions), and encryption mandates (S3 uploads required to use SSE-KMS) — alongside a layered, compliant-by-default CloudFormation baseline. Together they demonstrate the flexibility of SCPs and infrastructure-as-code as compliance enforcement mechanisms.
 
-This foundation positions the project for expansion into CI/CD pipeline guardrails, AWS Config rules for continuous compliance monitoring, drift remediation automation, and multi-account architectures with OU-scoped policies.
+This foundation positions the project for expansion into CI/CD pipeline guardrails, GuardDuty / Security Hub detection (planned Layer 5), drift-remediation automation, and multi-account architectures with OU-scoped policies.
 
 ## References
 
