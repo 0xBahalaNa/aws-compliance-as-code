@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Layer 5 - Detection & Response. Enables GuardDuty for ML-powered threat
+  detection (consuming the CloudTrail / VPC Flow Logs / DNS sources Layer 1
+  already turned on), routes HIGH-severity findings through an EventBridge
+  rule to an SNS topic with an email subscriber, and enables Security Hub
+  with the NIST 800-53 Rev 5 standard to aggregate findings from GuardDuty
+  + Config (Layer 4) into a single compliance dashboard. GuardDuty Detector
+  and Security Hub Hub are CONDITIONAL on the ManageDetectionServices
+  parameter (Provision / UseExisting) - both are one-per-region-per-account
+  singletons and may already be enabled by Control Tower, console, or a
+  prior stack. Satisfies NIST 800-53 Rev 5 SI-3, SI-4, IR-4, IR-5, IR-6;
+  CJIS v6.0 5.10.4.2.
+
+Parameters:
+  SecurityAlertEmail:
+    Type: String
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    ConstraintDescription: Must be a valid email address.
+    Description: >-
+      Email address to receive HIGH-severity security alerts. SNS sends a
+      subscription-confirmation email; the subscription is not active until
+      the recipient clicks the confirmation link (CFN does not block on
+      confirmation - the stack completes regardless).
+
+  ManageDetectionServices:
+    Type: String
+    Default: Provision
+    AllowedValues:
+      - Provision
+      - UseExisting
+    Description: >-
+      Whether to create the GuardDuty Detector and Security Hub Hub. Both
+      are one-per-account-per-region singletons; if the account already has
+      them enabled (Control Tower, console-onboarding, or a prior stack),
+      pass UseExisting and only the SNS topic + EventBridge rule + topic
+      policy are created - they wire alerts off the existing detector.
+      Security Hub Standards subscription is also skipped in UseExisting
+      mode (the existing setup is expected to manage subscriptions).
+
+Conditions:
+  ProvisionDetectionServices: !Equals [!Ref ManageDetectionServices, "Provision"]
+
+Resources:
+
+  # SNS topic for security alerts. Encrypted at rest with the AWS-managed
+  # alias/aws/sns key. Using the Layer 3 agency-managed CMK here would
+  # require adding sns.amazonaws.com to that key's policy - left as a
+  # cross-layer follow-up so this PR stays scoped. The alerts themselves
+  # are operational metadata, not CJI, so AWS-managed encryption is an
+  # acceptable trade-off for this layer.
+  SecurityAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-security-alerts"
+      DisplayName: "Security Alerts (Layer 5)"
+      KmsMasterKeyId: alias/aws/sns
+
+  # Email subscription. SNS sends the confirmation link on stack create;
+  # the subscription remains PendingConfirmation in describe-subscriptions
+  # until the recipient clicks the link. Unconfirmed subscriptions do not
+  # receive messages.
+  SecurityAlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref SecurityAlertTopic
+      Protocol: email
+      Endpoint: !Ref SecurityAlertEmail
+
+  # Topic policy: lets the EventBridge service publish to the topic, scoped
+  # by aws:SourceAccount (account-wide guard) AND aws:SourceArn (this
+  # stack's specific rule only) - tight confused-deputy protection. The
+  # rule ARN is reconstructed from the rule's Name; this does not create a
+  # circular CFN dependency because the policy references the rule via
+  # string substitution, not !Ref.
+  SecurityAlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref SecurityAlertTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeToPublish
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref SecurityAlertTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-high-severity-findings"
+
+  # GuardDuty detector - the ML threat-detection engine. Reads CloudTrail
+  # management/data events, VPC Flow Logs, and DNS query logs (all sourced
+  # from Layer 1). FindingPublishingFrequency FIFTEEN_MINUTES is the most
+  # aggressive option - critical for the IR-4 incident-handling story (the
+  # default SIX_HOURS leaves a six-hour blind spot between event and alert).
+  GuardDutyDetector:
+    Type: AWS::GuardDuty::Detector
+    Condition: ProvisionDetectionServices
+    Properties:
+      Enable: true
+      FindingPublishingFrequency: FIFTEEN_MINUTES
+
+  # EventBridge rule routing HIGH-severity GuardDuty findings to SNS. The
+  # event pattern is the FILTER - it decides which findings reach the
+  # SNS topic. A too-loose pattern floods the inbox; a too-tight pattern
+  # misses real incidents. See the Learn by Doing request in the PR for
+  # the design choice.
+  HighSeverityFindingsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-high-severity-findings"
+      Description: Routes HIGH-severity GuardDuty findings to the security-alert SNS topic (SI-4 / IR-4 / IR-5).
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.guardduty
+        detail-type:
+          - GuardDuty Finding
+        detail:
+          severity:
+            - numeric:
+              - ">="
+              - 7
+      Targets:
+        - Id: PublishToAlertTopic
+          Arn: !Ref SecurityAlertTopic
+
+  # Security Hub - the aggregator. Ingests findings from GuardDuty (this
+  # layer), Config (Layer 4), Inspector, Macie, and IAM Access Analyzer
+  # and presents them as a unified compliance dashboard.
+  SecurityHub:
+    Type: AWS::SecurityHub::Hub
+    Condition: ProvisionDetectionServices
+
+  # Subscribe to the NIST 800-53 Rev 5 standard. Security Hub continuously
+  # evaluates the account against the 800-53 controls and reports per-control
+  # pass/fail, closing the loop with the control mappings in this repo's
+  # README and in Project 1 (nist-800-53-rev-5-to-aws-mapping).
+  Nist80053Standard:
+    Type: AWS::SecurityHub::Standard
+    Condition: ProvisionDetectionServices
+    DependsOn: SecurityHub
+    Properties:
+      StandardsArn: !Sub "arn:aws:securityhub:${AWS::Region}::standards/nist-800-53/v/5.0.0"
+
+Outputs:
+  SecurityAlertTopicArn:
+    Description: ARN of the SNS topic receiving HIGH-severity security alerts.
+    Value: !Ref SecurityAlertTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityAlertTopicArn"
+
+  HighSeverityFindingsRuleArn:
+    Description: ARN of the EventBridge rule routing high-severity findings.
+    Value: !GetAtt HighSeverityFindingsRule.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-HighSeverityFindingsRuleArn"
+
+  GuardDutyDetectorId:
+    Condition: ProvisionDetectionServices
+    Description: GuardDuty detector ID.
+    Value: !Ref GuardDutyDetector
+    Export:
+      Name: !Sub "${AWS::StackName}-GuardDutyDetectorId"
