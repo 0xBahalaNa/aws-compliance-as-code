@@ -167,6 +167,41 @@ Resources:
               - kms:DescribeKey
             Resource: "*"
 
+          # Statement 5 - SNS service principal. Layer 5's security-alert
+          # topic encrypts messages with this CMK when its optional
+          # ComplianceCmkArn parameter is supplied; SNS calls GenerateDataKey
+          # as the sns.amazonaws.com service principal. aws:SourceAccount is
+          # the confused-deputy guard - only this account's SNS topics can
+          # use the key.
+          - Sid: AllowSnsServiceUsage
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+          # Statement 6 - SQS service principal. Same pattern as Statement 5
+          # but for the Layer 5 dead-letter queue. SQS calls GenerateDataKey
+          # to encrypt queued messages.
+          - Sid: AllowSqsServiceUsage
+            Effect: Allow
+            Principal:
+              Service: sqs.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
   # Alias = a stable, human-readable handle for the key. Templates and callers
   # reference alias/... so the underlying key can be replaced without
   # rewriting every reference.

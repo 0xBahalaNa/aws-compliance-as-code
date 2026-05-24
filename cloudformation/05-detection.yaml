@@ -1,16 +1,18 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Layer 5 - Detection & Response. Enables GuardDuty for ML-powered threat
-  detection (consuming the CloudTrail / VPC Flow Logs / DNS sources Layer 1
-  already turned on), routes HIGH-severity findings through an EventBridge
-  rule to an SNS topic with an email subscriber, and enables Security Hub
-  with the NIST 800-53 Rev 5 standard to aggregate findings from GuardDuty
-  + Config (Layer 4) into a single compliance dashboard. GuardDuty Detector
-  and Security Hub Hub are CONDITIONAL on the ManageDetectionServices
-  parameter (Provision / UseExisting) - both are one-per-region-per-account
-  singletons and may already be enabled by Control Tower, console, or a
-  prior stack. Satisfies NIST 800-53 Rev 5 SI-3, SI-4, IR-4, IR-5, IR-6;
-  CJIS v6.0 5.10.4.2.
+  Layer 5 - Detection & Response. Enables GuardDuty (with full Features:
+  S3 data events, EKS audit logs, EBS malware protection, RDS login events,
+  Lambda network logs) for ML-powered threat detection, routes HIGH-severity
+  findings through an EventBridge rule to an SNS topic with an email
+  subscriber, captures failed deliveries in an SQS dead-letter queue, and
+  enables Security Hub with the NIST 800-53 Rev 5 standard. GuardDuty
+  Detector and Security Hub Hub are CONDITIONAL on the ManageDetectionServices
+  parameter (Provision / UseExisting); the standard subscription runs in
+  BOTH modes (idempotent against any existing Hub) so the dashboard is
+  always wired up. SNS and SQS encrypt with the optional Layer 3 CMK when
+  ComplianceCmkArn is supplied, otherwise the AWS-managed alias/aws/sns
+  and alias/aws/sqs keys. Satisfies NIST 800-53 Rev 5 SI-3, SI-4, IR-4,
+  IR-5, IR-6; CJIS v6.0 5.10.4.2.
 
 Parameters:
   SecurityAlertEmail:
@@ -20,8 +22,10 @@ Parameters:
     Description: >-
       Email address to receive HIGH-severity security alerts. SNS sends a
       subscription-confirmation email; the subscription is not active until
-      the recipient clicks the confirmation link (CFN does not block on
-      confirmation - the stack completes regardless).
+      the recipient clicks the confirmation link. CFN does not block on
+      confirmation - the stack completes regardless. Run the verification
+      command in the PostDeployVerification output before treating the
+      alert pipeline as live.
 
   ManageDetectionServices:
     Type: String
@@ -31,35 +35,89 @@ Parameters:
       - UseExisting
     Description: >-
       Whether to create the GuardDuty Detector and Security Hub Hub. Both
-      are one-per-account-per-region singletons; if the account already has
-      them enabled (Control Tower, console-onboarding, or a prior stack),
-      pass UseExisting and only the SNS topic + EventBridge rule + topic
-      policy are created - they wire alerts off the existing detector.
-      Security Hub Standards subscription is also skipped in UseExisting
-      mode (the existing setup is expected to manage subscriptions).
+      are one-per-account-per-region singletons; if the account already
+      has them enabled (Control Tower, console-onboarding, or a prior
+      stack), pass UseExisting and only the SNS topic + DLQ + EventBridge
+      rule + topic policy + standard subscription are created. The NIST
+      800-53 Rev 5 standard subscription runs in BOTH modes (idempotent)
+      because Control Tower / console-onboarded hubs default to AWS FSBP,
+      not NIST - the standard this repo's compliance story relies on must
+      be subscribed explicitly even when the hub itself is pre-existing.
+
+  ComplianceCmkArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/.+)?$"
+    ConstraintDescription: Must be a full KMS key ARN or empty.
+    Description: >-
+      Optional ARN of the Layer 3 compliance CMK (03-encryption.yaml output
+      ComplianceCmkArn). When supplied, the SNS topic AND SQS DLQ are
+      encrypted with the agency-managed CMK (carries the SC-28 / CJIS
+      5.10.1.2 story forward). When empty (the default), they fall back
+      to the AWS-managed alias/aws/sns and alias/aws/sqs keys. The Layer 3
+      CMK key policy must allow sns.amazonaws.com and sqs.amazonaws.com
+      GenerateDataKey for this option to work - the Layer 3 template
+      includes those statements as of this PR.
 
 Conditions:
   ProvisionDetectionServices: !Equals [!Ref ManageDetectionServices, "Provision"]
+  UseExistingDetectionServices: !Equals [!Ref ManageDetectionServices, "UseExisting"]
+  UseAgencyCmk: !Not [!Equals [!Ref ComplianceCmkArn, ""]]
 
 Resources:
 
-  # SNS topic for security alerts. Encrypted at rest with the AWS-managed
-  # alias/aws/sns key. Using the Layer 3 agency-managed CMK here would
-  # require adding sns.amazonaws.com to that key's policy - left as a
-  # cross-layer follow-up so this PR stays scoped. The alerts themselves
-  # are operational metadata, not CJI, so AWS-managed encryption is an
-  # acceptable trade-off for this layer.
+  # SQS dead-letter queue for failed EventBridge → SNS deliveries. Without
+  # a DLQ, any publish failure (transient SNS throttle, topic-policy race,
+  # KMS error, or SNS-side rejection) is dropped after EventBridge's
+  # bounded retry window - a silent IR-4 / IR-6 hole. Captured DLQ messages
+  # can be inspected and re-driven manually.
+  SecurityAlertDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-alert-dlq"
+      KmsMasterKeyId: !If [UseAgencyCmk, !Ref ComplianceCmkArn, alias/aws/sqs]
+      MessageRetentionPeriod: 1209600
+
+  # SQS queue policy: lets the EventBridge service write to the DLQ when
+  # an SNS publish fails. Scoped by aws:SourceAccount AND aws:SourceArn
+  # to the specific rule. ${AWS::Partition} so the ARN resolves in
+  # GovCloud / China.
+  SecurityAlertDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SecurityAlertDeadLetterQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeToDeadLetter
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt SecurityAlertDeadLetterQueue.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-high-severity-findings"
+
+  # SNS topic for security alerts. Encrypted with the Layer 3 CMK when
+  # ComplianceCmkArn is supplied (preserves the agency-managed-key
+  # invariant the rest of the repo establishes), otherwise the AWS-managed
+  # alias/aws/sns key. Either works - the CMK path requires the Layer 3
+  # key policy to allow sns.amazonaws.com (added in this PR).
   SecurityAlertTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub "${AWS::StackName}-security-alerts"
       DisplayName: "Security Alerts (Layer 5)"
-      KmsMasterKeyId: alias/aws/sns
+      KmsMasterKeyId: !If [UseAgencyCmk, !Ref ComplianceCmkArn, alias/aws/sns]
 
-  # Email subscription. SNS sends the confirmation link on stack create;
-  # the subscription remains PendingConfirmation in describe-subscriptions
-  # until the recipient clicks the link. Unconfirmed subscriptions do not
-  # receive messages.
+  # Email subscription. The subscription remains PendingConfirmation until
+  # the recipient clicks the AWS confirmation link. Unconfirmed
+  # subscriptions silently drop messages, so verify post-deploy via the
+  # PostDeployVerification output.
   SecurityAlertSubscription:
     Type: AWS::SNS::Subscription
     Properties:
@@ -67,12 +125,12 @@ Resources:
       Protocol: email
       Endpoint: !Ref SecurityAlertEmail
 
-  # Topic policy: lets the EventBridge service publish to the topic, scoped
-  # by aws:SourceAccount (account-wide guard) AND aws:SourceArn (this
-  # stack's specific rule only) - tight confused-deputy protection. The
-  # rule ARN is reconstructed from the rule's Name; this does not create a
-  # circular CFN dependency because the policy references the rule via
-  # string substitution, not !Ref.
+  # Topic policy: lets EventBridge publish to the topic, scoped by
+  # aws:SourceAccount AND aws:SourceArn (the specific rule). Uses
+  # ${AWS::Partition} so the ArnEquals condition resolves correctly in
+  # GovCloud (aws-us-gov) and China (aws-cn) - a hardcoded literal
+  # 'arn:aws:' would silently never match in those partitions, leaving
+  # every publish denied and zero alerts delivered.
   SecurityAlertTopicPolicy:
     Type: AWS::SNS::TopicPolicy
     Properties:
@@ -91,27 +149,60 @@ Resources:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnEquals:
-                aws:SourceArn: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-high-severity-findings"
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-high-severity-findings"
 
-  # GuardDuty detector - the ML threat-detection engine. Reads CloudTrail
-  # management/data events, VPC Flow Logs, and DNS query logs (all sourced
-  # from Layer 1). FindingPublishingFrequency FIFTEEN_MINUTES is the most
-  # aggressive option - critical for the IR-4 incident-handling story (the
-  # default SIX_HOURS leaves a six-hour blind spot between event and alert).
+  # GuardDuty detector. CFN-created detectors do NOT auto-enable the
+  # add-on protections (only the console onboarding flow does), so the
+  # Features block explicitly turns on each one - S3 data events, EKS
+  # audit logs, EBS malware protection, RDS login events, Lambda network
+  # logs. Without this, the SI-4 coverage is narrower than a CJIS /
+  # FedRAMP-High reader would expect.
+  #
+  # FindingPublishingFrequency FIFTEEN_MINUTES controls how often UPDATES
+  # to existing findings are batched to EventBridge / S3; NEW findings
+  # publish within ~5 minutes regardless of this setting. The aggressive
+  # setting matters for repeat-occurrence correlation, not first-detection
+  # latency.
   GuardDutyDetector:
     Type: AWS::GuardDuty::Detector
     Condition: ProvisionDetectionServices
     Properties:
       Enable: true
       FindingPublishingFrequency: FIFTEEN_MINUTES
+      Features:
+        - Name: S3_DATA_EVENTS
+          Status: ENABLED
+        - Name: EKS_AUDIT_LOGS
+          Status: ENABLED
+        - Name: EBS_MALWARE_PROTECTION
+          Status: ENABLED
+        - Name: RDS_LOGIN_EVENTS
+          Status: ENABLED
+        - Name: LAMBDA_NETWORK_LOGS
+          Status: ENABLED
 
-  # EventBridge rule routing HIGH-severity GuardDuty findings to SNS. The
-  # event pattern is the FILTER - it decides which findings reach the
-  # SNS topic. A too-loose pattern floods the inbox; a too-tight pattern
-  # misses real incidents. See the Learn by Doing request in the PR for
-  # the design choice.
+  # EventBridge rule routing HIGH+ severity GuardDuty findings to SNS.
+  # severity >= 7 is the GuardDuty HIGH threshold (HIGH 7.0-8.9, CRITICAL
+  # 9.0-10.0); LOW (0-3.9) and MEDIUM (4-6.9) stay in Security Hub for
+  # triage without paging the on-call inbox.
+  #
+  # DependsOn covers BOTH the SNS topic policy AND the SQS DLQ policy:
+  # without these dependencies, CFN may mark the rule ENABLED before the
+  # publish / send-message grants are attached. The first finding in that
+  # window would then fail (publish denied) AND be lost (DLQ policy is
+  # also still being created, so even the dead-letter capture fails).
+  # DependsOn closes the race.
+  #
+  # DeadLetterConfig + RetryPolicy: failed deliveries land in the SQS DLQ
+  # for replay instead of being silently dropped after EventBridge's
+  # bounded retry window. Real concern for an alert pipeline that's idle
+  # 99% of the time - the one event that needs to get through is the one
+  # during the moment when it can't.
   HighSeverityFindingsRule:
     Type: AWS::Events::Rule
+    DependsOn:
+      - SecurityAlertTopicPolicy
+      - SecurityAlertDeadLetterQueuePolicy
     Properties:
       Name: !Sub "${AWS::StackName}-high-severity-findings"
       Description: Routes HIGH-severity GuardDuty findings to the security-alert SNS topic (SI-4 / IR-4 / IR-5).
@@ -125,29 +216,48 @@ Resources:
         detail:
           severity:
             - numeric:
-              - ">="
-              - 7
+                - ">="
+                - 7
       Targets:
         - Id: PublishToAlertTopic
           Arn: !Ref SecurityAlertTopic
+          DeadLetterConfig:
+            Arn: !GetAtt SecurityAlertDeadLetterQueue.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 10
+            MaximumEventAgeInSeconds: 3600
 
-  # Security Hub - the aggregator. Ingests findings from GuardDuty (this
-  # layer), Config (Layer 4), Inspector, Macie, and IAM Access Analyzer
-  # and presents them as a unified compliance dashboard.
+  # Security Hub Hub - the aggregator. Conditional: skipped in UseExisting
+  # so the stack can deploy in accounts where Control Tower or
+  # console-onboarding already enabled Security Hub.
   SecurityHub:
     Type: AWS::SecurityHub::Hub
     Condition: ProvisionDetectionServices
 
-  # Subscribe to the NIST 800-53 Rev 5 standard. Security Hub continuously
-  # evaluates the account against the 800-53 controls and reports per-control
-  # pass/fail, closing the loop with the control mappings in this repo's
-  # README and in Project 1 (nist-800-53-rev-5-to-aws-mapping).
-  Nist80053Standard:
+  # NIST 800-53 Rev 5 standard subscription - split across Provision and
+  # UseExisting modes so the standard is ALWAYS subscribed regardless of
+  # who created the Hub. Control Tower / console onboarding defaults to
+  # AWS FSBP, NOT NIST 800-53 Rev 5; subscribing the standard explicitly
+  # closes the gap. BatchEnableStandards is idempotent (no error if
+  # already subscribed), so the UseExisting variant is safe even if the
+  # standard happens to already be on.
+  #
+  # CFN cannot conditionalize DependsOn, so the Provision variant
+  # DependsOn the Hub it creates and the UseExisting variant has no
+  # DependsOn (the external Hub is assumed to be ready).
+  # ${AWS::Partition} for GovCloud / China.
+  Nist80053StandardProvisioned:
     Type: AWS::SecurityHub::Standard
     Condition: ProvisionDetectionServices
     DependsOn: SecurityHub
     Properties:
-      StandardsArn: !Sub "arn:aws:securityhub:${AWS::Region}::standards/nist-800-53/v/5.0.0"
+      StandardsArn: !Sub "arn:${AWS::Partition}:securityhub:${AWS::Region}::standards/nist-800-53/v/5.0.0"
+
+  Nist80053StandardExistingHub:
+    Type: AWS::SecurityHub::Standard
+    Condition: UseExistingDetectionServices
+    Properties:
+      StandardsArn: !Sub "arn:${AWS::Partition}:securityhub:${AWS::Region}::standards/nist-800-53/v/5.0.0"
 
 Outputs:
   SecurityAlertTopicArn:
@@ -155,6 +265,12 @@ Outputs:
     Value: !Ref SecurityAlertTopic
     Export:
       Name: !Sub "${AWS::StackName}-SecurityAlertTopicArn"
+
+  SecurityAlertDeadLetterQueueArn:
+    Description: ARN of the SQS DLQ catching failed EventBridge → SNS deliveries.
+    Value: !GetAtt SecurityAlertDeadLetterQueue.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityAlertDeadLetterQueueArn"
 
   HighSeverityFindingsRuleArn:
     Description: ARN of the EventBridge rule routing high-severity findings.
@@ -168,3 +284,11 @@ Outputs:
     Value: !Ref GuardDutyDetector
     Export:
       Name: !Sub "${AWS::StackName}-GuardDutyDetectorId"
+
+  PostDeployVerification:
+    Description: >-
+      Verify the alert pipeline before treating Layer 5 as live - SNS email
+      subscriptions remain PendingConfirmation until the recipient clicks
+      the link. Run the command in the Value field; SubscriptionArn must
+      not equal "PendingConfirmation" for any subscription.
+    Value: !Sub "aws sns list-subscriptions-by-topic --topic-arn ${SecurityAlertTopic} --query 'Subscriptions[*].[Endpoint,SubscriptionArn]' --output table"

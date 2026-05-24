@@ -63,7 +63,7 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 | Layer 2 — IAM Baseline | `cloudformation/02-iam-baseline.yaml` | CloudFormation (IaC) | Account password policy, a read-only auditor role, and an MFA + ExternalId admin role capped by a permissions boundary | Identity and Least Privilege |
 | Layer 3 — Encryption | `cloudformation/03-encryption.yaml` | CloudFormation (IaC) | Customer-managed KMS CMK with annual rotation, a separated key policy, and account-level EBS encryption-by-default | Data Protection at Rest |
 | Layer 4 — Configuration & Compliance | `cloudformation/04-config.yaml` | CloudFormation (IaC) | AWS Config recorder + delivery channel + dedicated SSE-KMS Object-Lock bucket, plus six managed Config Rules continuously validating Layers 1–3 | Continuous Compliance Monitoring |
-| Layer 5 — Detection & Response | `cloudformation/05-detection.yaml` | CloudFormation (IaC) | GuardDuty detector + EventBridge rule filtering HIGH-severity findings → SNS topic with email subscription; Security Hub enabled with the NIST 800-53 Rev 5 standard | Threat Detection and Incident Response |
+| Layer 5 — Detection & Response | `cloudformation/05-detection.yaml` | CloudFormation (IaC) | GuardDuty detector with full Features (S3 / EKS / Malware / RDS / Lambda), EventBridge rule filtering HIGH-severity findings → SNS topic with email subscription + SQS DLQ for failed deliveries; Security Hub enabled with the NIST 800-53 Rev 5 standard | Threat Detection and Incident Response |
 | Secure S3 Bucket | `cloudformation/secure-bucket.yaml` | CloudFormation (IaC) | An S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
 
 ## Compliance Framework Mapping
@@ -97,7 +97,7 @@ aws-compliance-as-code/
 │   ├── 02-iam-baseline.yaml            # Layer 2: IAM password policy + auditor/admin roles
 │   ├── 03-encryption.yaml              # Layer 3: KMS CMK + alias + EBS encryption-by-default
 │   ├── 04-config.yaml                  # Layer 4: AWS Config recorder + delivery channel + 6 managed rules
-│   ├── 05-detection.yaml               # Layer 5: GuardDuty + EventBridge + SNS + Security Hub (NIST 800-53)
+│   ├── 05-detection.yaml               # Layer 5: GuardDuty + EventBridge + SNS + SQS DLQ + Security Hub (NIST 800-53)
 │   └── secure-bucket.yaml              # Standalone: secure S3 bucket (public access block + AES256)
 ├── scps/
 │   ├── scp-deny-audit-log-deletion.json            # SCP: Deny CloudTrail DeleteTrail / StopLogging
@@ -272,7 +272,7 @@ Example output:
 
 ### Step 3: Deploy the CloudFormation Layers
 
-Deploy the numbered templates in order — each layer builds on the previous. All five layers create IAM resources, so `CAPABILITY_NAMED_IAM` is required (the flag covers both named and unnamed roles). (`secure-bucket.yaml` is a standalone foundational template and can be deployed independently.)
+Deploy the numbered templates in order — each layer builds on the previous. Layers 1–4 create named IAM resources, so `CAPABILITY_NAMED_IAM` is required for those; Layer 5 has no IAM resources but the same flag is harmless (it is a superset of `CAPABILITY_IAM`). (`secure-bucket.yaml` is a standalone foundational template and can be deployed independently.)
 
 **Layer 1 — Logging & Monitoring.** Leave `LogsBucketCmkArn` unset for now; the CloudTrail log bucket uses SSE-S3 until the Layer 3 CMK exists.
 
@@ -332,14 +332,17 @@ aws cloudformation deploy \
         --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
-**Layer 5 — Detection & Response.** Provide the email address for high-severity alerts. SNS will send a confirmation email — the subscription only becomes active when the recipient clicks it. **If the account already has GuardDuty or Security Hub enabled** (Control Tower, console, or a prior stack), add `ManageDetectionServices=UseExisting` to skip the singleton resources.
+**Layer 5 — Detection & Response.** Provide the email address for high-severity alerts. SNS sends a confirmation email — the subscription is **not** active until the recipient clicks the link, so after deploy run `aws sns list-subscriptions-by-topic` (the stack's `PostDeployVerification` output gives the exact command) to confirm `SubscriptionArn != "PendingConfirmation"`. **If the account already has GuardDuty or Security Hub enabled** (Control Tower, console, or a prior stack), add `ManageDetectionServices=UseExisting` to skip the singleton resources (the NIST 800-53 Rev 5 standard subscription still runs — Control Tower / console hubs default to AWS FSBP, not NIST 800-53). **To encrypt the SNS topic and DLQ with the Layer 3 agency CMK** (carries the SC-28 / CJIS 5.10.1.2 story through), also pass `ComplianceCmkArn`:
 
 ```
 aws cloudformation deploy \
     --stack-name compliance-layer5-detection \
     --template-file cloudformation/05-detection.yaml \
     --capabilities CAPABILITY_NAMED_IAM \
-    --parameter-overrides SecurityAlertEmail=<YOUR_EMAIL>
+    --parameter-overrides \
+        SecurityAlertEmail=<YOUR_EMAIL> \
+        ComplianceCmkArn=$(aws cloudformation describe-stacks --stack-name compliance-layer3-encryption \
+            --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
 **Verify deployment:**
