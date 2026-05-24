@@ -2,10 +2,14 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Layer 1 - Logging & Monitoring. Deploys a multi-region CloudTrail with a
   tamper-proof S3 log bucket (Object Lock in COMPLIANCE mode), a CloudWatch
-  Log Group for near-real-time delivery, and a VPC Flow Log on the default VPC.
-  Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.0
+  Log Group for near-real-time delivery, and a VPC Flow Log on the default
+  VPC. Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.0
   5.4.1 - integrity controls in place; encryption-at-rest closes by passing
   the Layer 3 CMK ARN to the LogsBucketCmkArn parameter (agency-managed key).
+  Bucket-policy lockdown (s3:PutBucketPolicy / s3:DeleteBucketPolicy denied
+  to everyone except the Layer 2 audit admin role) wires in via the optional
+  AuditAdminRoleArn parameter - same two-pass pattern as the CMK. Every
+  taggable resource carries a compliance/layer/project tag triple (CM-8).
 
 Parameters:
   TrailName:
@@ -13,46 +17,81 @@ Parameters:
     Default: org-cloudtrail
     Description: Name of the multi-region CloudTrail trail.
 
-  CloudWatchRetentionInDays:
+  CloudTrailRetentionInDays:
+    Type: Number
+    Default: 365
+    AllowedValues: [30, 60, 90, 180, 365, 400, 545, 731, 1827, 3653]
+    Description: >-
+      CloudWatch Logs retention for the CloudTrail group. S3 Object Lock
+      handles long-term immutable retention; CloudWatch is the hot,
+      queryable copy. 365 (one year) is the conservative default - long
+      enough to investigate slow-burn account compromise without
+      indefinitely growing the queryable cache.
+
+  FlowLogsRetentionInDays:
     Type: Number
     Default: 90
     AllowedValues: [30, 60, 90, 180, 365, 400, 545, 731, 1827, 3653]
     Description: >-
-      CloudWatch Logs retention for the CloudTrail and Flow Logs groups. S3
-      Object Lock handles long-term immutable retention; CloudWatch is the
-      hot, queryable copy.
+      CloudWatch Logs retention for the VPC Flow Logs group. Flow Logs
+      generate 10-100x the volume of CloudTrail, so 90 days is the
+      operational sweet spot: covers most incident-response windows
+      without the Flow Logs storage cost dominating the CloudWatch bill.
+      Bump if a longer mandate applies.
 
   S3ObjectLockRetentionDays:
     Type: Number
     Default: 365
     MinValue: 1
     Description: >-
-      Default Object Lock retention applied to every log object in COMPLIANCE
-      mode. FedRAMP High AU-11 baseline is 1 year online; raise for longer
-      mandates.
+      Default Object Lock retention applied to every log object in
+      COMPLIANCE mode. FedRAMP High AU-11 baseline is 1 year online; raise
+      for longer mandates.
 
   DefaultVpcId:
     Type: AWS::EC2::VPC::Id
     Description: >-
       VPC to attach Flow Logs to. Select the default VPC for AC compliance;
-      CloudFormation has no intrinsic for "default VPC", so it is parameterized.
+      CloudFormation has no intrinsic for "default VPC", so it is
+      parameterized.
 
   LogsBucketCmkArn:
     Type: String
     Default: ""
     Description: >-
       ARN of the Layer 3 compliance CMK (03-encryption.yaml output
-      ComplianceCmkArn). Leave empty on the first deploy - Layer 3 does not
-      exist yet, so the logs bucket falls back to SSE-S3 (AES256). After
-      Layer 3 is deployed, update this stack with the CMK ARN to switch the
-      bucket to SSE-KMS with the agency-managed key (SC-28 / CJIS 5.10.1.2).
-      Two-pass by design: Layer 1 is numbered first but its encryption key is
-      created in Layer 3.
+      ComplianceCmkArn). Leave empty on the first deploy - Layer 3 does
+      not exist yet, so the logs bucket falls back to SSE-S3 (AES256).
+      After Layer 3 is deployed, update this stack with the CMK ARN to
+      switch the bucket to SSE-KMS with the agency-managed key (SC-28 /
+      CJIS 5.10.1.2). Two-pass by design: Layer 1 is numbered first but
+      its encryption key is created in Layer 3.
+
+  AuditAdminRoleArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(arn:aws[a-z-]*:iam::[0-9]{12}:role/.+)?$"
+    ConstraintDescription: Must be a full IAM role ARN or empty (when bucket-policy lockdown is not yet wired).
+    Description: >-
+      Optional ARN of the IAM role permitted to modify the CloudTrail
+      bucket policy (s3:PutBucketPolicy / s3:DeleteBucketPolicy). Use the
+      Layer 2 admin role: <iam-baseline-stack-name>-admin. When supplied,
+      a Deny statement is added to the bucket policy that denies every
+      OTHER principal those two actions - so the auditable Deny chain
+      (DenyLogObjectDeletion, DenyInsecureTransport) cannot be silently
+      replaced by anyone except the audit admin. Leave empty on the first
+      deploy (Layer 2 does not exist yet); set on a follow-up update
+      after Layer 2 is deployed. Same two-pass pattern as LogsBucketCmkArn.
 
 Conditions:
-  # True once a Layer 3 CMK ARN has been supplied. Selects SSE-KMS (the
-  # agency-managed CMK) over the SSE-S3 fallback for the logs bucket.
+  # True once a Layer 3 CMK ARN has been supplied. Selects SSE-KMS over
+  # the SSE-S3 fallback for the logs bucket.
   UseCmkForLogsBucket: !Not [!Equals [!Ref LogsBucketCmkArn, ""]]
+
+  # True once a Layer 2 admin role ARN has been supplied. When true, the
+  # bucket policy gains a Deny statement preventing any other principal
+  # from rewriting or removing the policy.
+  LockBucketPolicy: !Not [!Equals [!Ref AuditAdminRoleArn, ""]]
 
 Resources:
 
@@ -70,9 +109,10 @@ Resources:
         ObjectLockEnabled: Enabled
         Rule:
           DefaultRetention:
-            # COMPLIANCE mode: even the root account cannot shorten or delete
-            # within the retention window. This is what AU-9 "Protection of
-            # Audit Information" leans on for evidence integrity.
+            # COMPLIANCE mode: even the root account cannot shorten or
+            # delete within the retention window. This is what AU-9
+            # "Protection of Audit Information" leans on for evidence
+            # integrity.
             Mode: COMPLIANCE
             Days: !Ref S3ObjectLockRetentionDays
       PublicAccessBlockConfiguration:
@@ -82,30 +122,40 @@ Resources:
         RestrictPublicBuckets: true
       BucketEncryption:
         ServerSideEncryptionConfiguration:
-          # SSE-KMS with the Layer 3 agency-managed CMK once its ARN is wired
-          # in via LogsBucketCmkArn; SSE-S3 (AES256) as the pre-Layer-3
-          # fallback. CJIS v6.0 5.10.1.2 requires an agency-managed key for
-          # CJI at rest - the CMK branch closes that gap; AES256 alone uses an
-          # AWS-managed key.
+          # SSE-KMS with the Layer 3 agency-managed CMK once its ARN is
+          # wired in via LogsBucketCmkArn; SSE-S3 (AES256) as the
+          # pre-Layer-3 fallback. CJIS v6.0 5.10.1.2 requires an
+          # agency-managed key for CJI at rest - the CMK branch closes
+          # that gap; AES256 alone uses an AWS-managed key.
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: !If [UseCmkForLogsBucket, "aws:kms", "AES256"]
               KMSMasterKeyID: !If
                 - UseCmkForLogsBucket
                 - !Ref LogsBucketCmkArn
                 - !Ref "AWS::NoValue"
-            # S3 Bucket Keys: with SSE-KMS, S3 generates one bucket-level key
-            # and derives per-object keys from it instead of calling KMS
-            # GenerateDataKey on every PUT - a large KMS cost cut for a
-            # high-volume log bucket. No effect under SSE-S3.
+            # S3 Bucket Keys: with SSE-KMS, S3 generates one bucket-level
+            # key and derives per-object keys from it instead of calling
+            # KMS GenerateDataKey on every PUT - a large KMS cost cut for
+            # a high-volume log bucket. No effect under SSE-S3.
             BucketKeyEnabled: !If [UseCmkForLogsBucket, true, !Ref "AWS::NoValue"]
       VersioningConfiguration:
-        # Required for Object Lock; also lets a poisoned overwrite be ignored
-        # because previous versions remain immutable.
+        # Required for Object Lock; also lets a poisoned overwrite be
+        # ignored because previous versions remain immutable.
         Status: Enabled
+      Tags:
+        - Key: Compliance
+          Value: NIST-800-53-Rev5
+        - Key: Layer
+          Value: 1-Logging
+        - Key: Project
+          Value: aws-compliance-as-code
 
-  # Bucket policy: (1) grants CloudTrail the writes it needs, (2) explicitly
-  # denies deletion of log objects. Object Lock is the hard control; this is
-  # the auditable, plain-English layer that maps cleanly to AU-9.
+  # Bucket policy: grants CloudTrail the writes it needs, explicitly denies
+  # deletion of log objects, denies insecure transport, AND (when
+  # LockBucketPolicy is true) denies any principal other than the audit
+  # admin role from modifying or removing the bucket policy itself.
+  # Object Lock is the hard floor; this policy is the auditable AU-9 layer
+  # on top of it; the lockdown is the AU-9 / AC-6 layer on top of THAT.
   CloudTrailLogsBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -149,6 +199,25 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: "false"
+          # Conditional bucket-policy lockdown. NotPrincipal with the
+          # audit admin role's ARN means the Deny applies to EVERY
+          # principal EXCEPT that role (sessions assumed from it are
+          # included automatically per AWS's resource-policy resolution).
+          # !If with AWS::NoValue removes the statement entirely when
+          # LockBucketPolicy is false - so the first-deploy state (no
+          # admin ARN yet) leaves the policy modifiable; the second-pass
+          # deploy locks it down.
+          - !If
+            - LockBucketPolicy
+            - Sid: DenyBucketPolicyModificationExceptAuditAdmin
+              Effect: Deny
+              NotPrincipal:
+                AWS: !Ref AuditAdminRoleArn
+              Action:
+                - s3:PutBucketPolicy
+                - s3:DeleteBucketPolicy
+              Resource: !GetAtt CloudTrailLogsBucket.Arn
+            - !Ref AWS::NoValue
 
   # CloudWatch Log Group is the hot, queryable mirror of CloudTrail events.
   # S3 stores immutable evidence; CloudWatch is for alerting and ad-hoc
@@ -158,7 +227,14 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/cloudtrail/${TrailName}"
-      RetentionInDays: !Ref CloudWatchRetentionInDays
+      RetentionInDays: !Ref CloudTrailRetentionInDays
+      Tags:
+        - Key: Compliance
+          Value: NIST-800-53-Rev5
+        - Key: Layer
+          Value: 1-Logging
+        - Key: Project
+          Value: aws-compliance-as-code
 
   # IAM role CloudTrail assumes to write events into CloudWatch Logs.
   # Scoped strictly to the log group ARN — least privilege per AC-6.
@@ -182,12 +258,20 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: !Sub "${CloudTrailLogGroup.Arn}:*"
+      Tags:
+        - Key: Compliance
+          Value: NIST-800-53-Rev5
+        - Key: Layer
+          Value: 1-Logging
+        - Key: Project
+          Value: aws-compliance-as-code
 
-  # The trail itself. IsMultiRegionTrail + IncludeGlobalServiceEvents is the
-  # AU-2/AU-12 completeness story: every region's API plus global services
-  # (IAM, STS, CloudFront, Route 53) are captured by a single trail. Log file
-  # validation produces SHA-256 digest files in S3, which is the AU-9
-  # cryptographic-integrity check on top of Object Lock immutability.
+  # The trail itself. IsMultiRegionTrail + IncludeGlobalServiceEvents is
+  # the AU-2/AU-12 completeness story: every region's API plus global
+  # services (IAM, STS, CloudFront, Route 53) are captured by a single
+  # trail. Log file validation produces SHA-256 digest files in S3, which
+  # is the AU-9 cryptographic-integrity check on top of Object Lock
+  # immutability.
   MainTrail:
     Type: AWS::CloudTrail::Trail
     DependsOn: CloudTrailLogsBucketPolicy
@@ -200,15 +284,29 @@ Resources:
       EnableLogFileValidation: true
       CloudWatchLogsLogGroupArn: !GetAtt CloudTrailLogGroup.Arn
       CloudWatchLogsRoleArn: !GetAtt CloudTrailToCloudWatchRole.Arn
+      Tags:
+        - Key: Compliance
+          Value: NIST-800-53-Rev5
+        - Key: Layer
+          Value: 1-Logging
+        - Key: Project
+          Value: aws-compliance-as-code
 
   # VPC Flow Logs cover the data plane (packets moving through ENIs) which
-  # CloudTrail does NOT see. CloudTrail = "who called the API"; Flow Logs =
-  # "what traffic crossed the wire". Both are needed for AU-2 completeness.
+  # CloudTrail does NOT see. CloudTrail = "who called the API"; Flow Logs
+  # = "what traffic crossed the wire". Both are needed for AU-2 completeness.
   FlowLogsGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/vpc/flowlogs/${DefaultVpcId}"
-      RetentionInDays: !Ref CloudWatchRetentionInDays
+      RetentionInDays: !Ref FlowLogsRetentionInDays
+      Tags:
+        - Key: Compliance
+          Value: NIST-800-53-Rev5
+        - Key: Layer
+          Value: 1-Logging
+        - Key: Project
+          Value: aws-compliance-as-code
 
   FlowLogsRole:
     Type: AWS::IAM::Role
@@ -231,6 +329,13 @@ Resources:
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
                 Resource: !Sub "${FlowLogsGroup.Arn}:*"
+      Tags:
+        - Key: Compliance
+          Value: NIST-800-53-Rev5
+        - Key: Layer
+          Value: 1-Logging
+        - Key: Project
+          Value: aws-compliance-as-code
 
   DefaultVpcFlowLog:
     Type: AWS::EC2::FlowLog
@@ -243,6 +348,13 @@ Resources:
       LogDestinationType: cloud-watch-logs
       LogGroupName: !Ref FlowLogsGroup
       DeliverLogsPermissionArn: !GetAtt FlowLogsRole.Arn
+      Tags:
+        - Key: Compliance
+          Value: NIST-800-53-Rev5
+        - Key: Layer
+          Value: 1-Logging
+        - Key: Project
+          Value: aws-compliance-as-code
 
 Outputs:
   CloudTrailLogsBucketName:
