@@ -82,14 +82,19 @@ Parameters:
       role, but IAM still denies the role from acting). The dedicated
       BucketPolicyAdminRole sidesteps that boundary with a narrow inline
       grant scoped to the CloudTrail bucket. When supplied, the lockdown
-      denies every other principal (except this role and the AWS account
-      root, carved out as final break-glass) from a comprehensive set of
-      bucket-config tamper actions - policy, ACL, encryption, public-
-      access block, Object Lock config, lifecycle, versioning, CORS,
-      notifications, logging, replication, tagging, ownership controls,
-      and bucket deletion. Leave empty on the first deploy; set on a
-      follow-up update after Layer 2 is deployed. Same two-pass pattern
-      as LogsBucketCmkArn.
+      denies every other principal (root included - root cannot bypass
+      an explicit S3 resource-policy Deny, so carving root out would add
+      bypass surface and no recovery value; if BucketPolicyAdminRole is
+      ever deleted, recovery requires AWS Support) from a comprehensive
+      set of bucket-config tamper actions - policy, ACL, encryption,
+      public-access block, Object Lock config, lifecycle, versioning,
+      CORS, notifications, logging, replication, tagging, ownership
+      controls, and bucket deletion. The carve-out is implemented as a
+      Condition on aws:PrincipalArn, NOT NotPrincipal - the latter with
+      an account-root ARN exempts every in-account IAM principal from
+      the Deny per AWS docs, neutralizing the lockdown. Leave empty on
+      the first deploy; set on a follow-up update after Layer 2 is
+      deployed. Same two-pass pattern as LogsBucketCmkArn.
 
       OPERATIONAL NOTE: this parameter must be passed on EVERY subsequent
       deploy that touches Layer 1. CloudFormation does not carry parameter
