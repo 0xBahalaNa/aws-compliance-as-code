@@ -221,35 +221,31 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: "false"
-          # Conditional bucket-CONFIG lockdown (not just bucket-policy).
-          # The Deny applies to EVERY principal EXCEPT (a) the
-          # BucketPolicyAdminRole carved out via AuditAdminRoleArn and
-          # (b) the AWS account root as final break-glass (root cannot
-          # bypass explicit resource-policy Denies, so without this
-          # carve-out a deleted/renamed admin role would brick recovery).
-          # Action list covers the full set of bucket-config tamper paths:
-          # the original narrow PutBucketPolicy/DeleteBucketPolicy Deny
-          # missed nine other actions an attacker with broad s3:* could
-          # use to weaken the audit posture without ever touching the
-          # policy itself - ACL change, encryption downgrade, public-
-          # access-block disable, Object-Lock-config tamper, lifecycle
-          # rules to confuse auditors, versioning suspend (rejected by
-          # Object Lock but worth denying as defense in depth),
-          # notification-based exfiltration to a cross-account Lambda,
-          # replication mirroring the bucket to attacker storage,
-          # ownership-controls flip, and bucket deletion. !If with
-          # AWS::NoValue removes the statement entirely when
-          # LockBucketPolicy is false (parameter empty); first-deploy
-          # state leaves the policy modifiable, second-pass deploy locks
-          # it down.
+          # Conditional bucket-CONFIG lockdown. Applies to every principal
+          # (Principal: "*") and exempts only the carve-out role via a
+          # Condition on aws:PrincipalArn. NotPrincipal was rejected here:
+          # AWS treats arn:aws:iam::ACCOUNT:root in NotPrincipal as "the
+          # entire account," which exempts every in-account IAM principal
+          # from the Deny and makes the lockdown a no-op for the threat
+          # model it targets (in-account compromised credentials, lateral
+          # movement via assumed roles). aws:PrincipalArn resolves to the
+          # role ARN (not the session ARN) for assumed-role sessions, so
+          # the carve-out works for both direct calls and STS sessions.
+          # Root is intentionally NOT carved out - root cannot be blocked
+          # by a bucket policy anyway, so an exemption provides zero
+          # defensive value and (per the NotPrincipal failure mode above)
+          # 100% of the bypass surface. Action list covers the full
+          # bucket-config tamper surface: policy, ACL, encryption,
+          # public-access block, Object-Lock config, lifecycle, versioning,
+          # CORS, notifications, logging, replication, tagging, ownership
+          # controls, and bucket deletion. !If with AWS::NoValue removes
+          # the statement entirely when LockBucketPolicy is false (first-
+          # deploy state); second-pass deploy locks it down.
           - !If
             - LockBucketPolicy
             - Sid: DenyBucketConfigTamperingExceptAuditAdmin
               Effect: Deny
-              NotPrincipal:
-                AWS:
-                  - !Ref AuditAdminRoleArn
-                  - !Sub "arn:aws:iam::${AWS::AccountId}:root"
+              Principal: "*"
               Action:
                 - s3:PutBucketPolicy
                 - s3:DeleteBucketPolicy
@@ -267,6 +263,9 @@ Resources:
                 - s3:PutBucketOwnershipControls
                 - s3:DeleteBucket
               Resource: !GetAtt CloudTrailLogsBucket.Arn
+              Condition:
+                StringNotEquals:
+                  aws:PrincipalArn: !Ref AuditAdminRoleArn
             - !Ref AWS::NoValue
 
   # CloudWatch Log Group is the hot, queryable mirror of CloudTrail events.

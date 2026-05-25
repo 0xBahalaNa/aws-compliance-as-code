@@ -197,17 +197,25 @@ Resources:
               - iam:UpdateAccountPasswordPolicy
               - iam:DeleteRolePermissionsBoundary
             Resource: "*"
-          # Compliance-critical roles cannot be deleted or have their
-          # policies stripped - blocks the self-DoS where the AdminRole
-          # deletes itself (or the BucketPolicyAdminRole) and bricks the
-          # Layer 1 bucket-policy lockdown by leaving NotPrincipal pointed
-          # at a non-existent ARN.
-          - Sid: DenyComplianceRoleDeletion
+          # Compliance-critical roles cannot be deleted OR mutated. Blocks
+          # both self-DoS (delete the role, bricking the Layer 1 lockdown
+          # by leaving the AuditAdminRoleArn carve-out pointed at a non-
+          # existent ARN) AND self-promotion (rewrite trust to drop MFA/
+          # ExternalId, attach AdministratorAccess to pivot into the
+          # lockdown carve-out). Mutation verbs matter most for the
+          # BucketPolicyAdminRole - it has its own narrow boundary (see
+          # BucketPolicyAdminBoundary below), but the mutation verbs here
+          # are the first line of defense; the boundary is the second.
+          - Sid: DenyComplianceRoleTampering
             Effect: Deny
             Action:
               - iam:DeleteRole
               - iam:DeleteRolePolicy
               - iam:DetachRolePolicy
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:PutRolePolicy
+              - iam:PutRolePermissionsBoundary
             Resource:
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-admin"
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-auditor"
@@ -286,17 +294,57 @@ Resources:
       PermissionsBoundary: !Ref AdminPermissionsBoundary
       MaxSessionDuration: 3600
 
+  # Permissions boundary for BucketPolicyAdminRole. The narrow inline
+  # grant on the role is the *intent*; this boundary is the *enforcement*.
+  # Even if a future iam:AttachRolePolicy attempt grants AdministratorAccess
+  # to the role (currently blocked by DenyComplianceRoleTampering, but
+  # defense-in-depth assumes that deny could be weakened or bypassed), the
+  # role's effective permissions remain capped to the bucket-config action
+  # set on the CloudTrail logs bucket. Distinct from AdminPermissionsBoundary
+  # because that boundary denies s3:PutBucketPolicy - the whole reason
+  # BucketPolicyAdminRole exists is to perform that action.
+  BucketPolicyAdminBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-bucket-policy-admin-boundary"
+      Description: >-
+        Permissions boundary capping BucketPolicyAdminRole to the bucket-
+        config action set on the CloudTrail logs bucket. Defense in depth
+        against future iam:AttachRolePolicy escalation.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CapToCloudTrailBucketConfig
+            Effect: Allow
+            Action:
+              - s3:GetBucketPolicy
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:PutBucketAcl
+              - s3:PutBucketPublicAccessBlock
+              - s3:PutEncryptionConfiguration
+              - s3:PutBucketObjectLockConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:PutBucketVersioning
+              - s3:PutBucketCORS
+              - s3:PutBucketNotification
+              - s3:PutBucketLogging
+              - s3:PutReplicationConfiguration
+              - s3:PutBucketTagging
+              - s3:PutBucketOwnershipControls
+            Resource: !Sub "arn:aws:s3:::cloudtrail-logs-${AWS::AccountId}"
+
   # Narrow break-glass role permitted to modify the CloudTrail bucket
   # policy. The general AdminRole's AdminPermissionsBoundary explicitly
   # denies s3:PutBucketPolicy (preventing the admin from tampering with
   # audit logging), so a SEPARATE role is needed to satisfy Layer 1's
-  # bucket-policy lockdown carve-out: the bucket-policy NotPrincipal
-  # carves out a named role, but if that role is the boundary-capped
-  # AdminRole, IAM still denies it from acting - hard brick. The
-  # BucketPolicyAdminRole has the same MFA + ExternalId trust as
-  # AdminRole but a SINGLE inline permission - bucket-config actions on
-  # the CloudTrail bucket only. No managed-policy attachments and no
-  # boundary - the narrow inline grant IS the cap (least functionality).
+  # bucket-policy lockdown carve-out. Trust mirrors AdminRole (MFA +
+  # ExternalId). The role carries a dedicated boundary
+  # (BucketPolicyAdminBoundary above) re-capping its effective permissions
+  # to the same action set as the inline grant - so iam:AttachRolePolicy
+  # escalation cannot expand the role beyond bucket-config on the
+  # CloudTrail bucket, even if the DenyComplianceRoleTampering Deny on
+  # AdminPermissionsBoundary is ever weakened.
   BucketPolicyAdminRole:
     Type: AWS::IAM::Role
     Properties:
@@ -347,6 +395,7 @@ Resources:
                   - s3:PutBucketTagging
                   - s3:PutBucketOwnershipControls
                 Resource: !Sub "arn:aws:s3:::cloudtrail-logs-${AWS::AccountId}"
+      PermissionsBoundary: !Ref BucketPolicyAdminBoundary
       MaxSessionDuration: 3600
 
 Outputs:
