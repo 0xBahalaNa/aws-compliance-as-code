@@ -70,18 +70,40 @@ Parameters:
   AuditAdminRoleArn:
     Type: String
     Default: ""
-    AllowedPattern: "^(arn:aws[a-z-]*:iam::[0-9]{12}:role/.+)?$"
-    ConstraintDescription: Must be a full IAM role ARN or empty (when bucket-policy lockdown is not yet wired).
+    AllowedPattern: "^(arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+)?$"
+    ConstraintDescription: Must be a full IAM role ARN using the IAM-allowed role-name character set, or empty.
     Description: >-
       Optional ARN of the IAM role permitted to modify the CloudTrail
-      bucket policy (s3:PutBucketPolicy / s3:DeleteBucketPolicy). Use the
-      Layer 2 admin role: <iam-baseline-stack-name>-admin. When supplied,
-      a Deny statement is added to the bucket policy that denies every
-      OTHER principal those two actions - so the auditable Deny chain
-      (DenyLogObjectDeletion, DenyInsecureTransport) cannot be silently
-      replaced by anyone except the audit admin. Leave empty on the first
-      deploy (Layer 2 does not exist yet); set on a follow-up update
-      after Layer 2 is deployed. Same two-pass pattern as LogsBucketCmkArn.
+      bucket policy AND other sensitive bucket-config actions. Use the
+      Layer 2 BucketPolicyAdminRole (Layer 2 output BucketPolicyAdminRoleArn)
+      - NOT the general AdminRole. The AdminPermissionsBoundary explicitly
+      denies s3:PutBucketPolicy on the AdminRole, so passing AdminRole
+      here would brick the lockdown (the bucket policy carves out the
+      role, but IAM still denies the role from acting). The dedicated
+      BucketPolicyAdminRole sidesteps that boundary with a narrow inline
+      grant scoped to the CloudTrail bucket. When supplied, the lockdown
+      denies every other principal (except this role and the AWS account
+      root, carved out as final break-glass) from a comprehensive set of
+      bucket-config tamper actions - policy, ACL, encryption, public-
+      access block, Object Lock config, lifecycle, versioning, CORS,
+      notifications, logging, replication, tagging, ownership controls,
+      and bucket deletion. Leave empty on the first deploy; set on a
+      follow-up update after Layer 2 is deployed. Same two-pass pattern
+      as LogsBucketCmkArn.
+
+      OPERATIONAL NOTE: this parameter must be passed on EVERY subsequent
+      deploy that touches Layer 1. CloudFormation does not carry parameter
+      values forward by default; an omitted deploy defaults this to ""
+      and silently DISABLES the lockdown via the LockBucketPolicy
+      condition - the Deny statement vanishes with no signal. Use
+      --parameter-overrides ParameterKey=AuditAdminRoleArn,UsePreviousValue=true
+      in CI/CD, or always pass the value explicitly.
+
+      DEPLOY-PRINCIPAL REQUIREMENT: any Layer 1 stack update that itself
+      modifies the bucket policy must be executed AS the
+      BucketPolicyAdminRole - other deploy principals hit the lockdown
+      Deny and the update rolls back. Assume the role via sts before
+      running cloudformation deploy on Layer 1.
 
 Conditions:
   # True once a Layer 3 CMK ARN has been supplied. Selects SSE-KMS over
@@ -199,23 +221,51 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: "false"
-          # Conditional bucket-policy lockdown. NotPrincipal with the
-          # audit admin role's ARN means the Deny applies to EVERY
-          # principal EXCEPT that role (sessions assumed from it are
-          # included automatically per AWS's resource-policy resolution).
-          # !If with AWS::NoValue removes the statement entirely when
-          # LockBucketPolicy is false - so the first-deploy state (no
-          # admin ARN yet) leaves the policy modifiable; the second-pass
-          # deploy locks it down.
+          # Conditional bucket-CONFIG lockdown (not just bucket-policy).
+          # The Deny applies to EVERY principal EXCEPT (a) the
+          # BucketPolicyAdminRole carved out via AuditAdminRoleArn and
+          # (b) the AWS account root as final break-glass (root cannot
+          # bypass explicit resource-policy Denies, so without this
+          # carve-out a deleted/renamed admin role would brick recovery).
+          # Action list covers the full set of bucket-config tamper paths:
+          # the original narrow PutBucketPolicy/DeleteBucketPolicy Deny
+          # missed nine other actions an attacker with broad s3:* could
+          # use to weaken the audit posture without ever touching the
+          # policy itself - ACL change, encryption downgrade, public-
+          # access-block disable, Object-Lock-config tamper, lifecycle
+          # rules to confuse auditors, versioning suspend (rejected by
+          # Object Lock but worth denying as defense in depth),
+          # notification-based exfiltration to a cross-account Lambda,
+          # replication mirroring the bucket to attacker storage,
+          # ownership-controls flip, and bucket deletion. !If with
+          # AWS::NoValue removes the statement entirely when
+          # LockBucketPolicy is false (parameter empty); first-deploy
+          # state leaves the policy modifiable, second-pass deploy locks
+          # it down.
           - !If
             - LockBucketPolicy
-            - Sid: DenyBucketPolicyModificationExceptAuditAdmin
+            - Sid: DenyBucketConfigTamperingExceptAuditAdmin
               Effect: Deny
               NotPrincipal:
-                AWS: !Ref AuditAdminRoleArn
+                AWS:
+                  - !Ref AuditAdminRoleArn
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:root"
               Action:
                 - s3:PutBucketPolicy
                 - s3:DeleteBucketPolicy
+                - s3:PutBucketAcl
+                - s3:PutBucketPublicAccessBlock
+                - s3:PutEncryptionConfiguration
+                - s3:PutBucketObjectLockConfiguration
+                - s3:PutLifecycleConfiguration
+                - s3:PutBucketVersioning
+                - s3:PutBucketCORS
+                - s3:PutBucketNotification
+                - s3:PutBucketLogging
+                - s3:PutReplicationConfiguration
+                - s3:PutBucketTagging
+                - s3:PutBucketOwnershipControls
+                - s3:DeleteBucket
               Resource: !GetAtt CloudTrailLogsBucket.Arn
             - !Ref AWS::NoValue
 

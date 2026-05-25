@@ -2,11 +2,14 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Layer 2 - IAM Baseline. Deploys an account-level password policy via a
   Lambda-backed custom resource (AWS::IAM::AccountPasswordPolicy is not a
-  native CFN type), a read-only AuditorRole with MFA-required trust, and an
-  AdminRole with MFA + sts:ExternalId trust plus a PermissionsBoundary cap.
-  Satisfies NIST 800-53 Rev 5 AC-2, AC-3, AC-6, IA-5. Partial CJIS v6.0
-  5.6.2.1 (password attributes via IA-5); AAL2 phishing-resistant MFA
-  (5.6.2.2 / IA-2) is deferred to IAM Identity Center work.
+  native CFN type), a read-only AuditorRole with MFA-required trust, an
+  AdminRole with MFA + sts:ExternalId trust plus a PermissionsBoundary cap,
+  and a narrow BucketPolicyAdminRole - the sole principal Layer 1's
+  bucket-policy lockdown carves out, since the AdminPermissionsBoundary
+  explicitly denies the general AdminRole from PutBucketPolicy. Satisfies
+  NIST 800-53 Rev 5 AC-2, AC-3, AC-6, IA-5. Partial CJIS v6.0 5.6.2.1
+  (password attributes via IA-5); AAL2 phishing-resistant MFA (5.6.2.2 /
+  IA-2) is deferred to IAM Identity Center work.
 
 Parameters:
   MinimumPasswordLength:
@@ -194,6 +197,21 @@ Resources:
               - iam:UpdateAccountPasswordPolicy
               - iam:DeleteRolePermissionsBoundary
             Resource: "*"
+          # Compliance-critical roles cannot be deleted or have their
+          # policies stripped - blocks the self-DoS where the AdminRole
+          # deletes itself (or the BucketPolicyAdminRole) and bricks the
+          # Layer 1 bucket-policy lockdown by leaving NotPrincipal pointed
+          # at a non-existent ARN.
+          - Sid: DenyComplianceRoleDeletion
+            Effect: Deny
+            Action:
+              - iam:DeleteRole
+              - iam:DeleteRolePolicy
+              - iam:DetachRolePolicy
+            Resource:
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-admin"
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-auditor"
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bucket-policy-admin"
 
   # Read-only role for evidence collection, audit walkthroughs, and Config /
   # Security Hub data export. Trusted by the account principal, requires MFA.
@@ -268,6 +286,69 @@ Resources:
       PermissionsBoundary: !Ref AdminPermissionsBoundary
       MaxSessionDuration: 3600
 
+  # Narrow break-glass role permitted to modify the CloudTrail bucket
+  # policy. The general AdminRole's AdminPermissionsBoundary explicitly
+  # denies s3:PutBucketPolicy (preventing the admin from tampering with
+  # audit logging), so a SEPARATE role is needed to satisfy Layer 1's
+  # bucket-policy lockdown carve-out: the bucket-policy NotPrincipal
+  # carves out a named role, but if that role is the boundary-capped
+  # AdminRole, IAM still denies it from acting - hard brick. The
+  # BucketPolicyAdminRole has the same MFA + ExternalId trust as
+  # AdminRole but a SINGLE inline permission - bucket-config actions on
+  # the CloudTrail bucket only. No managed-policy attachments and no
+  # boundary - the narrow inline grant IS the cap (least functionality).
+  BucketPolicyAdminRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-bucket-policy-admin"
+      Description: >-
+        Narrow break-glass role permitted to modify the CloudTrail bucket
+        policy and related bucket-config actions. Pass its ARN to Layer
+        1's AuditAdminRoleArn parameter.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustAccountPrincipalsWithMFAAndExternalId
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              Bool:
+                aws:MultiFactorAuthPresent: "true"
+              NumericLessThan:
+                aws:MultiFactorAuthAge: "900"
+              StringEquals:
+                sts:ExternalId: !Ref AdminRoleExternalId
+      Policies:
+        - PolicyName: BucketPolicyAdmin
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Scoped to the single CloudTrail logs bucket. Matches the
+              # action set Layer 1's lockdown protects, plus
+              # GetBucketPolicy for read access during edits.
+              - Sid: ManageCloudTrailBucketConfig
+                Effect: Allow
+                Action:
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:PutBucketAcl
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutBucketObjectLockConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:PutBucketVersioning
+                  - s3:PutBucketCORS
+                  - s3:PutBucketNotification
+                  - s3:PutBucketLogging
+                  - s3:PutReplicationConfiguration
+                  - s3:PutBucketTagging
+                  - s3:PutBucketOwnershipControls
+                Resource: !Sub "arn:aws:s3:::cloudtrail-logs-${AWS::AccountId}"
+      MaxSessionDuration: 3600
+
 Outputs:
   AuditorRoleArn:
     Description: ARN of the read-only auditor role. Pass to Security Hub / Config / evidence collectors.
@@ -286,3 +367,14 @@ Outputs:
     Value: !Ref AdminPermissionsBoundary
     Export:
       Name: !Sub "${AWS::StackName}-AdminPermissionsBoundaryArn"
+
+  BucketPolicyAdminRoleArn:
+    Description: >-
+      ARN of the narrow break-glass role permitted to modify the CloudTrail
+      bucket policy. Pass to Layer 1's AuditAdminRoleArn parameter to wire
+      up the bucket-policy lockdown - NOT AdminRoleArn (the AdminPermissions-
+      Boundary denies that role from PutBucketPolicy, which would brick the
+      lockdown).
+    Value: !GetAtt BucketPolicyAdminRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketPolicyAdminRoleArn"

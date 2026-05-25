@@ -308,18 +308,26 @@ aws cloudformation deploy \
             --query "Stacks[0].Outputs[?OutputKey=='AuditorRoleArn'].OutputValue" --output text)
 ```
 
-**Second pass — wire the CMK into Layer 1.** Re-deploy Layer 1 with the Layer 3 CMK ARN to switch the CloudTrail log bucket to SSE-KMS (agency-managed key). This two-pass step breaks the cycle: Layer 1 is numbered first but its encryption key is created in Layer 3.
+**Second pass — wire the CMK AND the bucket-policy lockdown into Layer 1.** Re-deploy Layer 1 with both the Layer 3 CMK ARN (switches the CloudTrail bucket to SSE-KMS) and the Layer 2 `BucketPolicyAdminRoleArn` (activates the bucket-config lockdown). The lockdown denies every principal except `BucketPolicyAdminRole` and root from modifying bucket policy / ACL / encryption / public-access-block / Object-Lock config / lifecycle / versioning / CORS / notifications / logging / replication / tagging / ownership-controls / bucket deletion. Two-pass by design: Layer 1 is numbered first but its encryption key and bucket-policy admin role are created in later layers.
 
 ```
 aws cloudformation deploy \
     --stack-name compliance-layer1-logging \
     --template-file cloudformation/01-logging.yaml \
     --capabilities CAPABILITY_NAMED_IAM \
-    --parameter-overrides DefaultVpcId=<DEFAULT_VPC_ID> \
-        LogsBucketCmkArn=$(aws cloudformation describe-stacks \
-        --stack-name compliance-layer3-encryption \
-        --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
+    --parameter-overrides \
+        DefaultVpcId=<DEFAULT_VPC_ID> \
+        LogsBucketCmkArn=$(aws cloudformation describe-stacks --stack-name compliance-layer3-encryption \
+            --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text) \
+        AuditAdminRoleArn=$(aws cloudformation describe-stacks --stack-name compliance-layer2-iam \
+            --query "Stacks[0].Outputs[?OutputKey=='BucketPolicyAdminRoleArn'].OutputValue" --output text)
 ```
+
+**Silent-disable warning.** CloudFormation does not carry parameter values forward by default. Any future Layer 1 deploy that omits `AuditAdminRoleArn` (or `LogsBucketCmkArn`) defaults the value to `""`, flips the corresponding `Lock*` condition to false, and silently REMOVES the Deny statement / reverts SSE-KMS to SSE-S3. Use `ParameterKey=AuditAdminRoleArn,UsePreviousValue=true` in CI/CD, or always pass the full parameter set explicitly.
+
+**Deploy-principal requirement (post-lockdown).** Any subsequent Layer 1 stack update that itself modifies the bucket policy must be executed AS the `BucketPolicyAdminRole` — any other principal hits the lockdown Deny and the stack update rolls back. Assume the role via `aws sts assume-role` before running `cloudformation deploy` on Layer 1.
+
+**Cross-stack lifecycle note.** Layer 1 references the Layer 2 `BucketPolicyAdminRole` via a raw string parameter, not `Fn::ImportValue` — CloudFormation cannot detect the dependency. If the Layer 2 stack is deleted, Layer 1's lockdown is silently bricked. Consider enabling stack-termination protection on the Layer 2 stack (`aws cloudformation update-termination-protection --enable-termination-protection`).
 
 **Layer 4 — Configuration & Compliance.** Pass the Layer 3 CMK ARN; the CMK and the Config bucket must be in the same region. Deploy after the Layer 1 second pass so the rules evaluate against the final SSE-KMS state. **If the account already has AWS Config enabled in this region** (Control Tower, console-onboarding, or a prior stack), add `ManageConfigService=UseExisting` to the overrides — the stack then creates only the six Config Rules, which evaluate against the existing recorder.
 
