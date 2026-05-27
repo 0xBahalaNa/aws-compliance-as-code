@@ -1,15 +1,32 @@
 AWSTemplateFormatVersion: "2010-09-09"
+
+# DEPLOY-PRINCIPAL REQUIREMENT: stack updates that touch either boundary
+# policy (and stack-delete) MUST be executed AS a principal NOT capped by
+# AdminPermissionsBoundary or BucketPolicyAdminBoundary - those boundaries
+# Deny the iam:CreatePolicyVersion / iam:SetDefaultPolicyVersion /
+# iam:DeletePolicy / iam:DeletePolicyVersion verbs CloudFormation uses to
+# update and tear down ManagedPolicies. Use the Org management account
+# root or a CI/CD role without either boundary attached. Layer 1's
+# BucketPolicyAdminRole is bounded too and cannot deploy Layer 2 updates;
+# this is the inverse of Layer 1's deploy-principal rule (Layer 1
+# bucket-policy updates require the bounded BucketPolicyAdminRole; Layer 2
+# boundary updates require an unbounded principal). The warning lives in
+# this comment because the CloudFormation Description field is capped at
+# 1024 characters.
+
 Description: >-
-  Layer 2 - IAM Baseline. Deploys an account-level password policy via a
-  Lambda-backed custom resource (AWS::IAM::AccountPasswordPolicy is not a
-  native CFN type), a read-only AuditorRole with MFA-required trust, an
-  AdminRole with MFA + sts:ExternalId trust plus a PermissionsBoundary cap,
-  and a narrow BucketPolicyAdminRole - the sole principal Layer 1's
-  bucket-policy lockdown carves out, since the AdminPermissionsBoundary
-  explicitly denies the general AdminRole from PutBucketPolicy. Satisfies
-  NIST 800-53 Rev 5 AC-2, AC-3, AC-6, IA-5. Partial CJIS v6.0 5.6.2.1
-  (password attributes via IA-5); AAL2 phishing-resistant MFA (5.6.2.2 /
-  IA-2) is deferred to IAM Identity Center work.
+  Layer 2 - IAM Baseline. Account password policy (Lambda-backed custom
+  resource - AWS::IAM::AccountPasswordPolicy is not a native CFN type),
+  AuditorRole (MFA-required trust, read-only), AdminRole (MFA +
+  sts:ExternalId trust, AdminPermissionsBoundary cap), and
+  BucketPolicyAdminRole (the sole principal Layer 1's bucket-policy
+  lockdown carves out, since AdminPermissionsBoundary denies AdminRole's
+  PutBucketPolicy). Both boundary policies carry DenyBoundarySelfMutation,
+  blocking the four ManagedPolicy mutation verbs on both boundary ARNs to
+  close the boundary-self-rewrite escalation. Satisfies NIST 800-53 Rev 5
+  AC-2, AC-3, AC-6, AC-6(9), AC-6(10), IA-5, CM-5. Partial CJIS v6.0
+  5.6.2.1 (password attributes via IA-5); AAL2 phishing-resistant MFA
+  (5.6.2.2 / IA-2) deferred to IAM Identity Center work.
 
 Parameters:
   MinimumPasswordLength:
@@ -220,6 +237,31 @@ Resources:
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-admin"
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-auditor"
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bucket-policy-admin"
+          # Self-referential closure for AdminRole (wears this boundary,
+          # holds iam:* via AdministratorAccess). Denies the four
+          # ManagedPolicy mutation verbs against this boundary AND the
+          # sibling BucketPolicyAdminBoundary - the second ARN blocks
+          # AdminRole from pivoting through the sibling (mutating its
+          # document, then assuming BucketPolicyAdminRole against a
+          # now-permissive cap). Scope is narrow: closes boundary
+          # self-mutation only. Sibling-role escalation via
+          # iam:CreatePolicy + iam:PutRolePermissionsBoundary on roles
+          # outside DenyComplianceRoleTampering's allowlist remains open;
+          # tracked as a separate follow-up issue. ARN format uses
+          # ${AWS::Partition} (survives GovCloud/China) and !Sub against
+          # the explicit ManagedPolicyName values - !Ref on the boundary's
+          # own logical ID inside its own PolicyDocument would be a
+          # CloudFormation circular dependency.
+          - Sid: DenyBoundarySelfMutation
+            Effect: Deny
+            Action:
+              - iam:CreatePolicyVersion
+              - iam:SetDefaultPolicyVersion
+              - iam:DeletePolicy
+              - iam:DeletePolicyVersion
+            Resource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-admin-boundary"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-bucket-policy-admin-boundary"
 
   # Read-only role for evidence collection, audit walkthroughs, and Config /
   # Security Hub data export. Trusted by the account principal, requires MFA.
@@ -333,6 +375,24 @@ Resources:
               - s3:PutBucketTagging
               - s3:PutBucketOwnershipControls
             Resource: !Sub "arn:aws:s3:::cloudtrail-logs-${AWS::AccountId}"
+          # Mirror of DenyBoundarySelfMutation in AdminPermissionsBoundary.
+          # Anticipatory hardening: under current state this Statement is
+          # unreachable because BucketPolicyAdminRole has no iam:* in its
+          # identity policy and this boundary's Allow set
+          # (CapToCloudTrailBucketConfig) is S3-only - iam:CreatePolicyVersion
+          # etc. are never in (identity intersect boundary). Defends if a
+          # future change widens either side. See the AdminPermissionsBoundary
+          # rationale comment for the escalation path being closed.
+          - Sid: DenyBoundarySelfMutation
+            Effect: Deny
+            Action:
+              - iam:CreatePolicyVersion
+              - iam:SetDefaultPolicyVersion
+              - iam:DeletePolicy
+              - iam:DeletePolicyVersion
+            Resource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-admin-boundary"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-bucket-policy-admin-boundary"
 
   # Narrow break-glass role permitted to modify the CloudTrail bucket
   # policy. The general AdminRole's AdminPermissionsBoundary explicitly
