@@ -417,6 +417,12 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-CloudTrailLogsBucketName"
 
+  CloudTrailLogsBucketArn:
+    Description: ARN of the CloudTrail logs bucket. Imported by Layer 2 to scope BucketPolicyAdminRole's bucket-config grants and to anchor BucketPolicyAdminBoundary's Allow set, replacing string-constructed bucket ARNs that silently drifted if the bucket-name template changed.
+    Value: !GetAtt CloudTrailLogsBucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudTrailLogsBucketArn"
+
   CloudTrailArn:
     Description: ARN of the multi-region trail.
     Value: !GetAtt MainTrail.Arn
