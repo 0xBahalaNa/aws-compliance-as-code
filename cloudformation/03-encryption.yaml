@@ -202,6 +202,36 @@ Resources:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
 
+          # Statement 7 - GuardDuty Malware Protection service principal.
+          # Layer 5 deploys GuardDuty with Features.EBS_MALWARE_PROTECTION
+          # enabled. Once this stack sets the CMK as the account's EBS
+          # default-encryption key (see ec2.modify_ebs_default_kms_key_id
+          # below), every new EBS volume in the region is encrypted under
+          # this CMK. When GuardDuty's malware scanner triggers on a finding,
+          # the malware-protection.guardduty.amazonaws.com service principal
+          # must call CreateGrant + Decrypt + GenerateDataKeyWithoutPlaintext
+          # on the CMK to snapshot and scan the encrypted volume. Without
+          # this Statement, every scan returns AccessDenied at KMS,
+          # GuardDuty silently records the failure in its internal stream,
+          # and zero EBS malware findings publish for the account -
+          # downgrading SI-3 (Malicious Code Protection) from "enforced"
+          # to "enabled but inoperative" with no operator-visible signal.
+          # aws:SourceAccount blocks any other account's GuardDuty SLR
+          # from using this key (confused-deputy guard).
+          - Sid: AllowGuardDutyMalwareProtection
+            Effect: Allow
+            Principal:
+              Service: malware-protection.guardduty.amazonaws.com
+            Action:
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKeyWithoutPlaintext
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
   # Alias = a stable, human-readable handle for the key. Templates and callers
   # reference alias/... so the underlying key can be replaced without
   # rewriting every reference.
