@@ -4,8 +4,10 @@ Description: >-
   tamper-proof S3 log bucket (Object Lock in COMPLIANCE mode), a CloudWatch
   Log Group for near-real-time delivery, and a VPC Flow Log on the default
   VPC. Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.0
-  5.4.1 - integrity controls in place; encryption-at-rest closes by passing
-  the Layer 3 CMK ARN to the LogsBucketCmkArn parameter (agency-managed key).
+  5.4.1 - integrity controls in place; S3 long-term store encryption-at-rest
+  closes by passing the Layer 3 CMK ARN to the LogsBucketCmkArn parameter
+  (agency-managed key). CloudWatch Logs hot-mirror remains under AWS-managed
+  encryption; full CJI-at-rest (5.10.1.2) closure deferred to v1.2.0.
   Bucket-policy lockdown (s3:PutBucketPolicy / s3:DeleteBucketPolicy denied
   to everyone except the Layer 2 audit admin role) wires in via the optional
   AuditAdminRoleArn parameter - same two-pass pattern as the CMK. Every
