@@ -68,57 +68,63 @@ Parameters:
       its encryption key is created in Layer 3.
 
   AuditAdminRoleArn:
-    Type: String
+    Type: CommaDelimitedList
     Default: ""
-    AllowedPattern: "^(arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+)?$"
-    ConstraintDescription: Must be a full IAM role ARN using the IAM-allowed role-name character set, or empty.
     Description: >-
-      Optional ARN of the IAM role permitted to modify the CloudTrail
-      bucket policy AND other sensitive bucket-config actions. Use the
-      Layer 2 BucketPolicyAdminRole (Layer 2 output BucketPolicyAdminRoleArn)
-      - NOT the general AdminRole. The AdminPermissionsBoundary explicitly
-      denies s3:PutBucketPolicy on the AdminRole, so passing AdminRole
-      here would brick the lockdown (the bucket policy carves out the
-      role, but IAM still denies the role from acting). The dedicated
-      BucketPolicyAdminRole sidesteps that boundary with a narrow inline
-      grant scoped to the CloudTrail bucket. When supplied, the lockdown
-      denies every other principal (root included - root cannot bypass
-      an explicit S3 resource-policy Deny, so carving root out would add
-      bypass surface and no recovery value; if BucketPolicyAdminRole is
-      ever deleted, recovery requires AWS Support) from a comprehensive
-      set of bucket-config tamper actions - policy, ACL, encryption,
-      public-access block, Object Lock config, lifecycle, versioning,
-      CORS, notifications, logging, replication, tagging, ownership
-      controls, and bucket deletion. The carve-out is implemented as a
-      Condition on aws:PrincipalArn, NOT NotPrincipal - the latter with
-      an account-root ARN exempts every in-account IAM principal from
-      the Deny per AWS docs, neutralizing the lockdown. Leave empty on
-      the first deploy; set on a follow-up update after Layer 2 is
-      deployed. Same two-pass pattern as LogsBucketCmkArn.
+      Optional comma-separated list of IAM role ARNs permitted to modify
+      the CloudTrail bucket policy AND other sensitive bucket-config
+      actions. Supply the Layer 2 BucketPolicyAdminRole (Layer 2 output
+      BucketPolicyAdminRoleArn) as the primary entry; optionally append
+      a break-glass role for primary-loss redundancy. CommaDelimitedList
+      loses the per-item AllowedPattern regex the previous String form
+      enforced - operators must pass valid IAM role ARNs without trailing
+      whitespace; CFN parameter resolution will not catch malformed
+      entries until deploy. Do NOT supply the general AdminRole here -
+      AdminPermissionsBoundary explicitly denies s3:PutBucketPolicy on
+      AdminRole, so its inclusion here would brick the lockdown (the
+      bucket policy carves out the role, but IAM still denies the role
+      from acting). When supplied, the lockdown denies every other
+      principal (root included - root cannot bypass an explicit S3
+      resource-policy Deny, so carving root out would add bypass surface
+      and no recovery value; if ALL carved-out roles are deleted,
+      recovery requires AWS Support) from a comprehensive set of
+      bucket-config tamper actions. The carve-out uses ArnNotEquals on
+      aws:PrincipalArn against the list (case- and form-tolerant where
+      the previous StringNotEquals was case-sensitive), NOT NotPrincipal -
+      the latter with an account-root ARN exempts every in-account IAM
+      principal from the Deny per AWS docs, neutralizing the lockdown.
+      Leave empty on the first deploy; set on a follow-up update after
+      Layer 2 is deployed. Same two-pass pattern as LogsBucketCmkArn.
 
       OPERATIONAL NOTE: this parameter must be passed on EVERY subsequent
       deploy that touches Layer 1. CloudFormation does not carry parameter
-      values forward by default; an omitted deploy defaults this to ""
-      and silently DISABLES the lockdown via the LockBucketPolicy
-      condition - the Deny statement vanishes with no signal. Use
+      values forward by default; an omitted deploy defaults this to an
+      empty list and silently DISABLES the lockdown via the
+      LockBucketPolicy condition - the Deny statement vanishes with no
+      signal. Use
       --parameter-overrides ParameterKey=AuditAdminRoleArn,UsePreviousValue=true
       in CI/CD, or always pass the value explicitly.
 
       DEPLOY-PRINCIPAL REQUIREMENT: any Layer 1 stack update that itself
-      modifies the bucket policy must be executed AS the
-      BucketPolicyAdminRole - other deploy principals hit the lockdown
-      Deny and the update rolls back. Assume the role via sts before
-      running cloudformation deploy on Layer 1.
+      modifies the bucket policy must be executed AS one of the carved-out
+      roles (BucketPolicyAdminRole or any break-glass role passed alongside
+      it) - other deploy principals hit the lockdown Deny and the update
+      rolls back. Assume the role via sts before running cloudformation
+      deploy on Layer 1.
 
 Conditions:
   # True once a Layer 3 CMK ARN has been supplied. Selects SSE-KMS over
   # the SSE-S3 fallback for the logs bucket.
   UseCmkForLogsBucket: !Not [!Equals [!Ref LogsBucketCmkArn, ""]]
 
-  # True once a Layer 2 admin role ARN has been supplied. When true, the
-  # bucket policy gains a Deny statement preventing any other principal
-  # from rewriting or removing the policy.
-  LockBucketPolicy: !Not [!Equals [!Ref AuditAdminRoleArn, ""]]
+  # True once at least one Layer 2 admin role ARN has been supplied via
+  # the CommaDelimitedList parameter. The parameter's Default: "" resolves
+  # to a single-element list [""] - !Select [0, ...] grabs that first
+  # element so the comparison is against a scalar string, not a list.
+  # When the first element is non-empty, the bucket policy gains a Deny
+  # preventing any principal outside the carve-out list from rewriting
+  # or removing the policy.
+  LockBucketPolicy: !Not [!Equals [!Select [0, !Ref AuditAdminRoleArn], ""]]
 
 Resources:
 
@@ -266,10 +272,27 @@ Resources:
                 - s3:PutReplicationConfiguration
                 - s3:PutBucketTagging
                 - s3:PutBucketOwnershipControls
+                # ASYMMETRY: s3:DeleteBucket is in this lockdown Deny but
+                # NOT in BucketPolicyAdminRole's inline grant or
+                # BucketPolicyAdminBoundary's Allow set (see Layer 2
+                # ManageCloudTrailBucketConfig + CapToCloudTrailBucketConfig).
+                # The carve-out advertises an exemption the role cannot
+                # exercise - intentional, to make bucket deletion fully
+                # unreachable from within the carved-out principal set
+                # and preserve audit evidence. To delete the bucket
+                # legitimately, an operator must first widen
+                # BucketPolicyAdminRole's grants in Layer 2.
                 - s3:DeleteBucket
               Resource: !GetAtt CloudTrailLogsBucket.Arn
               Condition:
-                StringNotEquals:
+                # ArnNotEquals (not StringNotEquals): ARN-shape-aware
+                # comparison tolerates ARN form variants StringNotEquals
+                # would silently reject (case differences, path-segment
+                # whitespace from a templating layer). Against the
+                # CommaDelimitedList, the principal's ARN must match ANY
+                # entry to exit the Deny - so the lockdown carves out the
+                # full primary + break-glass set with one Statement.
+                ArnNotEquals:
                   aws:PrincipalArn: !Ref AuditAdminRoleArn
             - !Ref AWS::NoValue
 
