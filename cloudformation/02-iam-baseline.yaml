@@ -71,6 +71,44 @@ Parameters:
       deploy with a long random string; the default is a placeholder so the
       template validates but should never ship to production.
 
+  Layer1StackName:
+    Type: String
+    Default: compliance-layer1-logging
+    Description: >-
+      Name of the deployed Layer 1 (01-logging.yaml) stack. Layer 2 imports
+      CloudTrailLogsBucketArn from that stack's Outputs to scope
+      BucketPolicyAdminRole's bucket-config grants and BucketPolicyAdminBoundary's
+      Allow set, replacing the string-constructed bucket ARN that silently
+      drifted if Layer 1's bucket-name template changed. Override if Layer 1
+      was deployed under a non-default stack name.
+
+  AdminRoleSuffix:
+    Type: String
+    Default: admin
+    Description: >-
+      Suffix appended to AWS::StackName to construct AdminRole's RoleName and
+      the matching Resource ARN inside DenyComplianceRoleTampering. Single
+      Parameter drives both consumers so renaming the role updates both sites
+      atomically; eliminates the silent-drift footgun where a rename made the
+      boundary's Deny stop matching the actual role.
+
+  AuditorRoleSuffix:
+    Type: String
+    Default: auditor
+    Description: >-
+      Suffix appended to AWS::StackName to construct AuditorRole's RoleName.
+      AuditorRole has no PermissionsBoundary, so DenyComplianceRoleTampering's
+      Resource entry for it uses !GetAtt AuditorRole.Arn instead of a
+      string-constructed ARN; the suffix here drives only the role name.
+
+  BucketPolicyAdminRoleSuffix:
+    Type: String
+    Default: bucket-policy-admin
+    Description: >-
+      Suffix appended to AWS::StackName to construct BucketPolicyAdminRole's
+      RoleName and the matching Resource ARN inside DenyComplianceRoleTampering.
+      Same rationale as AdminRoleSuffix.
+
 Resources:
 
   # IAM password policy is an account-wide singleton with no CloudFormation
@@ -234,9 +272,17 @@ Resources:
               - iam:PutRolePolicy
               - iam:PutRolePermissionsBoundary
             Resource:
-              - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-admin"
-              - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-auditor"
-              - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bucket-policy-admin"
+              # AdminRole and BucketPolicyAdminRole wear PermissionsBoundary
+              # references to this same stack's ManagedPolicies, so
+              # !GetAtt RoleName.Arn would create a CFN dependency cycle
+              # (boundary -> role; role -> boundary). String-construct via
+              # the same suffix Parameter that drives the role's RoleName
+              # so a rename updates both sites atomically.
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-${AdminRoleSuffix}"
+              # AuditorRole has no PermissionsBoundary -> cycle-free, can
+              # use a direct dependency edge.
+              - !GetAtt AuditorRole.Arn
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-${BucketPolicyAdminRoleSuffix}"
           # Self-referential closure for AdminRole (wears this boundary,
           # holds iam:* via AdministratorAccess). Denies the four
           # ManagedPolicy mutation verbs against this boundary AND the
@@ -272,7 +318,7 @@ Resources:
   AuditorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-auditor"
+      RoleName: !Sub "${AWS::StackName}-${AuditorRoleSuffix}"
       Description: >-
         Read-only role for compliance evidence collection. Requires MFA on
         assume.
@@ -312,7 +358,7 @@ Resources:
   AdminRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-admin"
+      RoleName: !Sub "${AWS::StackName}-${AdminRoleSuffix}"
       Description: >-
         Privileged break-glass role. Requires MFA + ExternalId on assume.
         Permissions capped by AdminPermissionsBoundary.
@@ -374,7 +420,8 @@ Resources:
               - s3:PutReplicationConfiguration
               - s3:PutBucketTagging
               - s3:PutBucketOwnershipControls
-            Resource: !Sub "arn:aws:s3:::cloudtrail-logs-${AWS::AccountId}"
+            Resource:
+              Fn::ImportValue: !Sub "${Layer1StackName}-CloudTrailLogsBucketArn"
           # Mirror of DenyBoundarySelfMutation in AdminPermissionsBoundary.
           # Anticipatory hardening: under current state this Statement is
           # unreachable because BucketPolicyAdminRole has no iam:* in its
@@ -408,7 +455,7 @@ Resources:
   BucketPolicyAdminRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-bucket-policy-admin"
+      RoleName: !Sub "${AWS::StackName}-${BucketPolicyAdminRoleSuffix}"
       Description: >-
         Narrow break-glass role permitted to modify the CloudTrail bucket
         policy and related bucket-config actions. Pass its ARN to Layer
@@ -454,7 +501,8 @@ Resources:
                   - s3:PutReplicationConfiguration
                   - s3:PutBucketTagging
                   - s3:PutBucketOwnershipControls
-                Resource: !Sub "arn:aws:s3:::cloudtrail-logs-${AWS::AccountId}"
+                Resource:
+                  Fn::ImportValue: !Sub "${Layer1StackName}-CloudTrailLogsBucketArn"
       PermissionsBoundary: !Ref BucketPolicyAdminBoundary
       MaxSessionDuration: 3600
 
