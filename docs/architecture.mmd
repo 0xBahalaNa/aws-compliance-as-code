@@ -1,0 +1,22 @@
+%% Source diagram for the README "Architecture Overview" section.
+%% The rendered/branded version is exported to docs/architecture.png via eraser.io.
+%% Keep this text source in sync whenever the architecture changes — it is the
+%% diff-able record of what the binary PNG depicts.
+graph TD
+    A[AWS Organization] --> B[Organization Root]
+    B --> SCP["Service Control Policies<br/>Preventive Guardrails"]
+    SCP --> S1["Deny Audit Log Deletion"]
+    SCP --> S2["Deny Root User Usage"]
+    SCP --> S3["Protect Logging and Encryption"]
+    SCP --> S4["Require S3 KMS Encryption"]
+    SCP --> S5["Restrict Network Changes by Region"]
+    B --> ACC["Member Account"]
+    ACC --> L1["Layer 1 (01-logging.yaml)<br/>CloudTrail + Object Lock S3 + VPC Flow Logs"]
+    ACC --> L2["Layer 2 (02-iam-baseline.yaml)<br/>Password Policy + Auditor and Admin Roles"]
+    ACC --> L3["Layer 3 (03-encryption.yaml)<br/>KMS CMK + EBS Default Encryption"]
+    ACC --> L4["Layer 4 (04-config.yaml)<br/>Config Recorder + Compliance Rules"]
+    ACC --> L5["Layer 5 (05-detection.yaml)<br/>GuardDuty + EventBridge + SNS + SQS DLQ + Security Hub"]
+    ACC --> SB["secure-bucket.yaml<br/>Secure S3 Bucket"]
+    L3 -. exports CMK ARN .-> L1
+    L3 -. exports CMK ARN .-> L4
+    L3 -. exports CMK ARN .-> L5
