@@ -72,6 +72,86 @@ Each control was selected to address specific compliance requirements across CJI
 
 > **FedRAMP Baseline Key:** L = Low, M = Moderate, H = High
 
+## Audit Relevance
+
+An assessor reviewing a FedRAMP High or CJIS v6.0 authorization package uses this baseline as the **primary technical control implementation evidence** for the AC, AU, IA, SC, CM, SI, and IR control families covered by Layers 1–5 and the five SCPs. The mapping table above is the assessment crosswalk; each control row points to the specific file (CloudFormation template or SCP JSON) the assessor requests during an EXAMINE procedure.
+
+For walkthrough-style assessments (FedRAMP NIST 800-53A): the templates ARE the as-built configuration documentation. An assessor asks *"show me how you enforce SC-28 at the EBS layer"* and the answer is `03-encryption.yaml`'s `EbsEncryptionByDefault` resource — the source-controlled artifact that *is* the implementation, not a screenshot of the AWS Console at a point in time. Git history is the change-control evidence (CM-3, CM-5) — every modification is reviewable, attributable, and rollback-capable.
+
+For continuous-monitoring assessments (CA-7): Layer 4's six managed Config Rules continuously evaluate Layers 1–3, producing AWS Config compliance evaluations as machine-readable evidence on every resource change. Layer 5's Security Hub aggregates these against the NIST 800-53 Rev 5 standard, becoming the single review surface for the assessor. The SCPs sit in front of all of it as preventive control evidence (AC-3, AU-9, SC-7, SC-13) — denials produce CloudTrail `AccessDenied` events that document the boundary working as designed.
+
+The release-gate review cycle (see issue history) extends this further: cross-layer integration findings (e.g., the SCP × Layer 4 Config delivery interaction in `UseExisting` mode) are tracked as POA&M items per CA-5 and remediated in versioned releases.
+
+## FedRAMP 20x Alignment
+
+FedRAMP 20x restructures the program around **compliance-as-code, machine-readable evidence, continuous monitoring, API-driven evidence, and automated scanning**. This baseline targets the program directly:
+
+- **Compliance-as-code:** Every control is a CloudFormation template or SCP JSON in this repo. The compliance contract IS the code; drift is detectable via `cloudformation drift-detection` and `aws organizations describe-policy`.
+- **Machine-readable evidence:** Layer 4's Config Rules emit `Compliance` evaluations as JSON; Layer 5's Security Hub aggregates findings against the NIST 800-53 Rev 5 standard; SCP denials surface as CloudTrail `AccessDenied` events. Each is a structured JSON record consumable without human transcription.
+- **Continuous monitoring:** Layer 4 continuously evaluates the configuration baseline; Layer 5 continuously detects anomalies. Together they replace the FedRAMP annual / 3-year cadence with per-event evaluation against the same controls.
+- **API-driven evidence:** Every artifact this baseline produces is API-queryable — `aws configservice describe-compliance-by-resource`, `aws securityhub get-findings`, `aws cloudtrail lookup-events`. No console screenshots required.
+- **30-day vs 90-day review window:** The baseline's per-event JSON evidence stream fits the FedRAMP 20x 30-day machine-readable review SLA. Each Layer 4 compliance state change and each Layer 5 finding is a unit of input to that review.
+
+The baseline pairs with [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline) which transforms these JSON evidence streams into OSCAL Assessment Results (SAR) JSON for FedRAMP 20x submission packages. The August 2026 Terraform conversion (per the Sprint Plan) doubles as the CGE-P IaC Portfolio submission — Terraform + OPA/Rego + CI/CD pipeline + KSI dashboard delivered against this baseline's already-defined control set.
+
+## CJIS v6.0 Relevance
+
+CJIS v6.0 (audit standard from April 1, 2026) aligns with NIST 800-53 Rev 5 and introduces three material deltas that this baseline directly addresses:
+
+- **Agency-managed CMK only (SC-12, SC-13, SC-28).** Layer 3 provisions a customer-managed `AWS::KMS::Key` with an explicit key policy. AWS-managed encryption (SSE-S3, default EBS) is replaced everywhere CJI may flow — the Layer 1 CloudTrail log bucket SSE-KMS pass adopts the Layer 3 CMK; Layer 4's Config delivery bucket reuses the same key; Layer 5's SNS topic and DLQ optionally encrypt to the same key via the `ComplianceCmkArn` parameter. CJIS prohibits cloud-provider-held keys for CJI; the architecture forces an agency-CMK posture.
+- **1-year minimum audit retention (AU-9, AU-6).** Layer 1's CloudTrail log bucket uses S3 **Object Lock in COMPLIANCE mode** — neither root nor any IAM principal can delete a log object inside its retention window, providing the WORM-style 1-year retention CJIS requires. The CloudWatch hot mirror provides queryable access for the weekly review without compromising the cold archive.
+- **CJI boundary protection (SC-7, AC-3).** The `scp-restrict-network-changes-by-region` SCP confines security-group changes to approved regions, preventing CJI traffic from being redirected into unapproved boundaries via VPC misconfiguration.
+
+The remaining CJIS-specific deltas (FIPS 140-3 boundary, fingerprint-based background check process, AAL2 MFA on IdP federation) are out of scope for the AWS-baseline layer and addressed elsewhere in the portfolio — see [`cjis-fedramp-high-gap-analysis`](https://github.com/0xBahalaNa/cjis-fedramp-high-gap-analysis) for the full delta inventory.
+
+## Sample Evidence Output
+
+The baseline produces three distinct classes of machine-readable evidence:
+
+**1. SCP denial events** (CloudTrail) — preventive control evidence. When a principal attempts a denied action, CloudTrail records an `AccessDenied` event referencing the SCP:
+
+```json
+{
+  "eventTime": "2026-06-03T14:22:17Z",
+  "eventName": "DeleteTrail",
+  "eventSource": "cloudtrail.amazonaws.com",
+  "errorCode": "AccessDenied",
+  "errorMessage": "An explicit deny in a service control policy",
+  "userIdentity": { "type": "IAMUser", "arn": "arn:aws:iam::123456789012:user/dev-1" },
+  "requestParameters": { "name": "compliance-trail" }
+}
+```
+
+**2. AWS Config compliance evaluation** (Layer 4) — continuous monitoring evidence. A resource is evaluated against a Config Rule on every configuration change:
+
+```json
+{
+  "ConfigRuleName": "s3-bucket-server-side-encryption-enabled",
+  "ResourceType": "AWS::S3::Bucket",
+  "ResourceId": "evidence-bucket-prod",
+  "ComplianceType": "COMPLIANT",
+  "ConfigRuleInvokedTime": "2026-06-03T14:25:33Z",
+  "ResultRecordedTime": "2026-06-03T14:25:34Z",
+  "Annotation": "SSE-KMS with agency CMK arn:aws:kms:us-east-1:123456789012:key/abc-..."
+}
+```
+
+**3. Security Hub finding** (Layer 5) — detective control evidence aggregated against the NIST 800-53 Rev 5 standard:
+
+```json
+{
+  "Id": "arn:aws:securityhub:us-east-1:123456789012:control/nist-800-53/v/5.0.0/AC-2/finding/...",
+  "Title": "AC-2(1) Automated System Account Management — Compliant",
+  "Severity": { "Label": "INFORMATIONAL" },
+  "Compliance": { "Status": "PASSED" },
+  "Resources": [{ "Type": "AwsIamUser", "Id": "arn:aws:iam::123456789012:user/auditor" }],
+  "Workflow": { "Status": "RESOLVED" },
+  "UpdatedAt": "2026-06-03T14:30:00Z"
+}
+```
+
+All three are consumed by [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline) for transformation into OSCAL Assessment Results — closing the FedRAMP 20x detect → evaluate → retain → review loop end-to-end.
+
 ## Repository Structure
 
 ```
