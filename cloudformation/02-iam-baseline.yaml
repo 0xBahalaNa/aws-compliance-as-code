@@ -2,10 +2,11 @@ AWSTemplateFormatVersion: "2010-09-09"
 
 # DEPLOY-PRINCIPAL REQUIREMENT: stack updates that touch either boundary
 # policy (and stack-delete) MUST be executed AS a principal NOT capped by
-# AdminPermissionsBoundary or BucketPolicyAdminBoundary - those boundaries
-# Deny the iam:CreatePolicyVersion / iam:SetDefaultPolicyVersion /
-# iam:DeletePolicy / iam:DeletePolicyVersion verbs CloudFormation uses to
-# update and tear down ManagedPolicies. Use the Org management account
+# AdminPermissionsBoundary or BucketPolicyAdminBoundary. AdminPermissionsBoundary
+# Denies iam:CreatePolicy account-wide; both boundaries Deny iam:CreatePolicyVersion
+# / iam:SetDefaultPolicyVersion / iam:DeletePolicy / iam:DeletePolicyVersion - the
+# verbs CloudFormation uses to create, update, and tear down ManagedPolicies.
+# Use the Org management account
 # root or a CI/CD role without either boundary attached. Layer 1's
 # BucketPolicyAdminRole is bounded too and cannot deploy Layer 2 updates;
 # this is the inverse of Layer 1's deploy-principal rule (Layer 1
@@ -268,9 +269,7 @@ Resources:
               - iam:DeleteRolePolicy
               - iam:DetachRolePolicy
               - iam:UpdateAssumeRolePolicy
-              - iam:AttachRolePolicy
               - iam:PutRolePolicy
-              - iam:PutRolePermissionsBoundary
             Resource:
               # AdminRole and BucketPolicyAdminRole wear PermissionsBoundary
               # references to this same stack's ManagedPolicies, so
@@ -283,6 +282,21 @@ Resources:
               # use a direct dependency edge.
               - !GetAtt AuditorRole.Arn
               - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-${BucketPolicyAdminRoleSuffix}"
+          # Narrows sibling-role escalation (0XBN-148/#22): AdminRole cannot
+          # mint a customer-managed policy, attach a managed policy to any
+          # role, or set a permissions boundary on roles outside the
+          # compliance triplet. Does NOT close the inline-policy/new-principal
+          # family - iam:PutRolePolicy on non-triplet roles and iam:CreateRole
+          # of a boundaryless role remain open (tracked in #36).
+          # Complements DenyComplianceRoleTampering, which stays scoped to the
+          # three named roles for delete/trust mutations only.
+          - Sid: DenySiblingRoleEscalation
+            Effect: Deny
+            Action:
+              - iam:CreatePolicy
+              - iam:AttachRolePolicy
+              - iam:PutRolePermissionsBoundary
+            Resource: "*"
           # Self-referential closure for AdminRole (wears this boundary,
           # holds iam:* via AdministratorAccess). Denies the four
           # ManagedPolicy mutation verbs against this boundary AND the
@@ -290,10 +304,10 @@ Resources:
           # AdminRole from pivoting through the sibling (mutating its
           # document, then assuming BucketPolicyAdminRole against a
           # now-permissive cap). Scope is narrow: closes boundary
-          # self-mutation only. Sibling-role escalation via
-          # iam:CreatePolicy + iam:PutRolePermissionsBoundary on roles
-          # outside DenyComplianceRoleTampering's allowlist remains open;
-          # tracked as a separate follow-up issue. ARN format uses
+          # self-mutation only. The managed-policy-attach and boundary-set
+          # vectors of sibling-role escalation are closed by
+          # DenySiblingRoleEscalation above; the inline-policy/CreateRole
+          # vectors are not (see #36). ARN format uses
           # ${AWS::Partition} (survives GovCloud/China) and !Sub against
           # the explicit ManagedPolicyName values - !Ref on the boundary's
           # own logical ID inside its own PolicyDocument would be a
@@ -385,8 +399,9 @@ Resources:
   # Permissions boundary for BucketPolicyAdminRole. The narrow inline
   # grant on the role is the *intent*; this boundary is the *enforcement*.
   # Even if a future iam:AttachRolePolicy attempt grants AdministratorAccess
-  # to the role (currently blocked by DenyComplianceRoleTampering, but
-  # defense-in-depth assumes that deny could be weakened or bypassed), the
+  # to the role (currently blocked by DenySiblingRoleEscalation on
+  # AdminPermissionsBoundary, but defense-in-depth assumes that deny could
+  # be weakened or bypassed), the
   # role's effective permissions remain capped to the bucket-config action
   # set on the CloudTrail logs bucket. Distinct from AdminPermissionsBoundary
   # because that boundary denies s3:PutBucketPolicy - the whole reason
@@ -440,6 +455,16 @@ Resources:
             Resource:
               - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-admin-boundary"
               - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-bucket-policy-admin-boundary"
+          # Mirror of DenyIamBaselineTampering's iam:DeleteRolePermissionsBoundary
+          # Deny in AdminPermissionsBoundary (0XBN-148/#22). Anticipatory:
+          # BucketPolicyAdminRole has no iam:* today, but if a future change
+          # widens its identity policy, this blocks detaching the boundary
+          # to escape the S3-only cap.
+          - Sid: DenyBoundaryDetachment
+            Effect: Deny
+            Action:
+              - iam:DeleteRolePermissionsBoundary
+            Resource: "*"
 
   # Narrow break-glass role permitted to modify the CloudTrail bucket
   # policy. The general AdminRole's AdminPermissionsBoundary explicitly
