@@ -96,7 +96,7 @@ The baseline pairs with [`oscal-evidence-pipeline`](https://github.com/0xBahalaN
 
 ## CJIS v6.0 Relevance
 
-CJIS v6.0 (audit standard from April 1, 2026) aligns with NIST 800-53 Rev 5 and introduces three material deltas that this baseline directly addresses:
+CJIS v6.0 (published Dec 27, 2024; default audit baseline from April 1, 2026; Priority 2-4 fully enforceable Oct 1, 2027) aligns with NIST 800-53 Rev 5 and introduces three material deltas that this baseline directly addresses:
 
 - **Agency-managed CMK only (SC-12, SC-13, SC-28).** Layer 3 provisions a customer-managed `AWS::KMS::Key` with an explicit key policy. AWS-managed encryption (SSE-S3, default EBS) is replaced everywhere CJI may flow — the Layer 1 CloudTrail log bucket SSE-KMS pass adopts the Layer 3 CMK; Layer 4's Config delivery bucket reuses the same key; Layer 5's SNS topic and DLQ optionally encrypt to the same key via the `ComplianceCmkArn` parameter. CJIS prohibits cloud-provider-held keys for CJI; the architecture forces an agency-CMK posture.
 - **1-year minimum audit retention (AU-9, AU-6).** Layer 1's CloudTrail log bucket uses S3 **Object Lock in COMPLIANCE mode** — neither root nor any IAM principal can delete a log object inside its retention window, providing the WORM-style 1-year retention CJIS requires. The CloudWatch hot mirror provides queryable access for the weekly review without compromising the cold archive.
