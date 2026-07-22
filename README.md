@@ -14,9 +14,28 @@ The controls in this repository map to requirements from CJIS Security Policy, F
 
 ## Architecture Overview
 
-![Architecture diagram: SCPs attached at the AWS Organization Root enforce preventive guardrails that override IAM, sitting above five compliant-by-default CloudFormation layers — Logging, IAM Baseline, Encryption, Config, and Detection — deployed into the member account. The Layer 3 KMS customer-managed key encrypts resources across the logging and configuration layers.](docs/architecture.png)
+```mermaid
+graph TD
+    A[AWS Organization] --> B[Organization Root]
+    B --> SCP["Service Control Policies<br/>Preventive Guardrails"]
+    SCP --> S1["Deny Audit Log Deletion"]
+    SCP --> S2["Deny Root User Usage"]
+    SCP --> S3["Protect Logging and Encryption"]
+    SCP --> S4["Require S3 KMS Encryption"]
+    SCP --> S5["Restrict Network Changes by Region"]
+    B --> ACC["Member Account"]
+    ACC --> L1["Layer 1 (01-logging.yaml)<br/>CloudTrail + Object Lock S3 + VPC Flow Logs"]
+    ACC --> L2["Layer 2 (02-iam-baseline.yaml)<br/>Password Policy + Auditor and Admin Roles"]
+    ACC --> L3["Layer 3 (03-encryption.yaml)<br/>KMS CMK + EBS Default Encryption"]
+    ACC --> L4["Layer 4 (04-config.yaml)<br/>Config Recorder + Compliance Rules"]
+    ACC --> L5["Layer 5 (05-detection.yaml)<br/>GuardDuty + EventBridge + SNS + SQS DLQ + Security Hub"]
+    ACC --> SB["secure-bucket.yaml<br/>Secure S3 Bucket"]
+    L3 -. exports CMK ARN .-> L1
+    L3 -. exports CMK ARN .-> L4
+    L3 -. exports CMK ARN .-> L5
+```
 
-<!-- Rendered diagram exported from eraser.io. Editable Mermaid source is preserved at docs/architecture.mmd, kept in its own file because Mermaid's arrow syntax would otherwise prematurely close an HTML comment. -->
+Editable Mermaid source (kept in sync with the fence above): [`docs/architecture.mmd`](docs/architecture.mmd).
 
 SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into member accounts as numbered layers (`01` → `02` → `03` → `04` → `05`), each building on the previous, to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
 
