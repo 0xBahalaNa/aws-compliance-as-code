@@ -8,9 +8,9 @@
 
 # AWS Compliance as Code
 
-This project implements compliance controls as code using AWS Service Control Policies (SCPs) and CloudFormation. Rather than relying on manual compliance checks, I built automated, enforceable guardrails that prevent non-compliant actions at the AWS Organization level and deploy secure infrastructure by default.
+I implement compliance controls as code using AWS Service Control Policies (SCPs) and CloudFormation. Manual compliance checks do not scale. So I built automated guardrails that block non-compliant actions at the AWS Organization level and deploy secure infrastructure by default.
 
-The controls in this repository map to requirements from CJIS Security Policy, FedRAMP, and NIST 800-53, demonstrating how compliance frameworks translate into real, enforceable cloud infrastructure policies.
+The controls map to CJIS Security Policy, FedRAMP, and NIST 800-53. The point is to show how those frameworks turn into enforceable cloud policies, not just documentation.
 
 ## Architecture Overview
 
@@ -37,21 +37,21 @@ graph TD
 
 Editable Mermaid source (kept in sync with the fence above): [`docs/architecture.mmd`](docs/architecture.mmd).
 
-SCPs are attached at the Organization Root, enforcing preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates are deployed into member accounts as numbered layers (`01` → `02` → `03` → `04` → `05`), each building on the previous, to provision resources that meet security baselines without manual configuration. Together, they create a defense-in-depth model where organization-level policies and account-level infrastructure work in tandem.
+SCPs attach at the Organization Root and enforce preventive guardrails across all accounts. These policies override IAM permissions, including administrator access, so non-compliant actions are blocked before they happen. CloudFormation templates deploy into member accounts as numbered layers (`01` → `02` → `03` → `04` → `05`), each building on the previous, to provision resources that meet security baselines without manual configuration. Organization-level policies and account-level infrastructure work together.
 
 ## Compliance Frameworks
 
 ### CJIS Security Policy
 
-The FBI's [CJIS Security Policy](https://le.fbi.gov/file-repository/cjis_security_policy_v6-0_20241227.pdf) establishes security requirements for any organization that accesses, stores, or transmits Criminal Justice Information (CJI). This includes law enforcement agencies, cloud service providers hosting CJI, and contractors supporting criminal justice systems. Version 6.0 (released December 2024) restructured the policy from 13 to 20 policy areas, now organized by NIST 800-53 control families: Access Control (AC), Auditing and Accountability (AU), Configuration Management (CM), Systems and Communications Protection (SC), and others. Controls use NIST 800-53 identifiers directly, aligning CJIS requirements with federal cybersecurity standards. Version 6.0 introduces priority levels (P1 through P4) for phased implementation, with FBI audits underway as of October 2025 and full compliance expected by October 2027.
+The FBI's [CJIS Security Policy](https://le.fbi.gov/file-repository/cjis_security_policy_v6-0_20241227.pdf) sets security requirements for any organization that accesses, stores, or transmits Criminal Justice Information (CJI). That includes law enforcement agencies, cloud providers hosting CJI, and contractors supporting criminal justice systems. Version 6.0 (released December 2024) restructured the policy from 13 to 20 policy areas, now organized by NIST 800-53 control families: Access Control (AC), Auditing and Accountability (AU), Configuration Management (CM), Systems and Communications Protection (SC), and others. Controls use NIST 800-53 identifiers directly. Version 6.0 introduces priority levels (P1 through P4) for phased implementation, with FBI audits underway as of October 2025 and full compliance expected by October 2027.
 
 ### FedRAMP
 
-The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fedramp.gov/) standardizes security assessments for cloud service providers (CSPs) serving federal agencies. FedRAMP defines three authorization baselines, Low, Moderate, and High, corresponding to the FIPS 199 impact level of the data being processed. Each baseline specifies a set of required NIST 800-53 controls. This project targets FedRAMP High, which requires the most comprehensive set of security controls and applies to systems processing the government's most sensitive unclassified data.
+The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fedramp.gov/) standardizes security assessments for cloud service providers (CSPs) serving federal agencies. FedRAMP defines three authorization baselines (Low, Moderate, and High) that map to the FIPS 199 impact level of the data. Each baseline specifies required NIST 800-53 controls. This project targets FedRAMP High, which applies to systems processing the government's most sensitive unclassified data.
 
 ### NIST SP 800-53 Rev. 5
 
-[NIST Special Publication 800-53 Revision 5](https://csf.tools/reference/sp-800-53/r5/) is the authoritative catalog of security and privacy controls for federal information systems. It serves as the foundation for both CJIS and FedRAMP requirements. Controls are organized into families (AC for Access Control, AU for Audit, SC for System and Communications Protection, CM for Configuration Management) and provide the technical specificity needed to translate compliance requirements into enforceable infrastructure policies.
+[NIST Special Publication 800-53 Revision 5](https://csf.tools/reference/sp-800-53/r5/) is the control catalog for federal information systems. Both CJIS and FedRAMP build on it. Controls are organized into families (AC for Access Control, AU for Audit, SC for System and Communications Protection, CM for Configuration Management) and give the technical specificity needed to turn compliance requirements into enforceable infrastructure policies.
 
 ## Controls Implemented
 
@@ -62,16 +62,16 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 | Protect Logging and Encryption | `scps/scp-protect-logging-and-encryption.json` | SCP (Preventive) | Denies `ec2:DeleteFlowLogs` and `ec2:DisableEbsEncryptionByDefault`, guarding the Layer 1 and Layer 3 controls | Audit Integrity / Data Protection |
 | Require S3 KMS Encryption | `scps/scp-require-s3-encryption.json` | SCP (Preventive) | Denies `s3:PutObject` unless the request specifies `aws:kms` server-side encryption | Data Protection at Rest |
 | Restrict Network Changes by Region | `scps/scp-restrict-network-changes-by-region.json` | SCP (Preventive) | Denies security group ingress/egress changes outside approved regions (`us-east-1`, `us-west-2`) | Network Boundary Protection |
-| Layer 1 — Logging and Monitoring | `cloudformation/01-logging.yaml` | CloudFormation (IaC) | Multi-region CloudTrail, an Object Lock (COMPLIANCE mode) log bucket, a CloudWatch log group, and VPC Flow Logs | Audit and Accountability |
-| Layer 2 — IAM Baseline | `cloudformation/02-iam-baseline.yaml` | CloudFormation (IaC) | Account password policy, a read-only auditor role, and an MFA + ExternalId admin role capped by a permissions boundary | Identity and Least Privilege |
-| Layer 3 — Encryption | `cloudformation/03-encryption.yaml` | CloudFormation (IaC) | Customer-managed KMS CMK with annual rotation, a separated key policy, and account-level EBS encryption-by-default | Data Protection at Rest |
-| Layer 4 — Configuration & Compliance | `cloudformation/04-config.yaml` | CloudFormation (IaC) | AWS Config recorder + delivery channel + dedicated SSE-KMS Object-Lock bucket, plus six managed Config Rules continuously validating Layers 1–3 | Continuous Compliance Monitoring |
-| Layer 5 — Detection & Response | `cloudformation/05-detection.yaml` | CloudFormation (IaC) | GuardDuty detector with full Features (S3 / EKS / Malware / RDS / Lambda), EventBridge rule filtering HIGH-severity findings → SNS topic with email subscription + SQS DLQ for failed deliveries; Security Hub enabled with the NIST 800-53 Rev 5 standard | Threat Detection and Incident Response |
+| Layer 1: Logging and Monitoring | `cloudformation/01-logging.yaml` | CloudFormation (IaC) | Multi-region CloudTrail, an Object Lock (COMPLIANCE mode) log bucket, a CloudWatch log group, and VPC Flow Logs | Audit and Accountability |
+| Layer 2: IAM Baseline | `cloudformation/02-iam-baseline.yaml` | CloudFormation (IaC) | Account password policy, a read-only auditor role, and an MFA + ExternalId admin role capped by a permissions boundary | Identity and Least Privilege |
+| Layer 3: Encryption | `cloudformation/03-encryption.yaml` | CloudFormation (IaC) | Customer-managed KMS CMK with annual rotation, a separated key policy, and account-level EBS encryption-by-default | Data Protection at Rest |
+| Layer 4: Configuration & Compliance | `cloudformation/04-config.yaml` | CloudFormation (IaC) | AWS Config recorder + delivery channel + dedicated SSE-KMS Object-Lock bucket, plus six managed Config Rules continuously validating Layers 1–3 | Continuous Compliance Monitoring |
+| Layer 5: Detection & Response | `cloudformation/05-detection.yaml` | CloudFormation (IaC) | GuardDuty detector with full Features (S3 / EKS / Malware / RDS / Lambda), EventBridge rule filtering HIGH-severity findings → SNS topic with email subscription + SQS DLQ for failed deliveries; Security Hub enabled with the NIST 800-53 Rev 5 standard | Threat Detection and Incident Response |
 | Secure S3 Bucket | `cloudformation/secure-bucket.yaml` | CloudFormation (IaC) | An S3 bucket with all public access blocked and AES256 server-side encryption | Secure by Default |
 
 ## Compliance Framework Mapping
 
-Each control was selected to address specific compliance requirements across CJIS Security Policy, FedRAMP, and NIST 800-53. The combination of preventive SCPs and compliant-by-default IaC templates creates layered enforcement; SCPs act as guardrails that cannot be bypassed even by IAM administrators, while CloudFormation ensures new resources are provisioned to meet baseline security requirements without manual configuration.
+Each control addresses specific requirements across CJIS Security Policy, FedRAMP, and NIST 800-53. Preventive SCPs and compliant-by-default IaC templates create layered enforcement. SCPs act as guardrails that IAM administrators cannot bypass. CloudFormation ensures new resources meet baseline security requirements without manual configuration.
 
 | Control / Component | CJIS Security Policy (v6.0) | FedRAMP Baseline | NIST 800-53 Rev. 5 |
 |---|---|---|---|
@@ -80,11 +80,11 @@ Each control was selected to address specific compliance requirements across CJI
 | Protect Logging and Encryption | AU-9 (Protection of Audit Information), SC-28 (Protection of Information at Rest) | AU-9 (L/M/H), SC-28 (M/H) | AU-9 (Protection of Audit Information), SC-28 (Protection of Information at Rest) |
 | Require S3 KMS Encryption | SC-28 (Protection of Information at Rest), SC-13 (Cryptographic Protection) | SC-28 (M/H), SC-13 (L/M/H) | SC-28 (Protection of Information at Rest), SC-13 (Cryptographic Protection) |
 | Restrict Network Changes by Region | SC-7 (Boundary Protection) | SC-7 (L/M/H) | SC-7 (Boundary Protection) |
-| Layer 1 — Logging and Monitoring | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9, AU-12 | AU-2 (L/M/H), AU-3 (L/M/H), AU-9 (L/M/H), AU-12 (L/M/H) | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) |
-| Layer 2 — IAM Baseline | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), AC-6(9) (Log Use of Privileged Functions), AC-6(10) (Prohibit Non-Privileged Users from Privileged Functions), IA-5 (Authenticator Management), CM-5 (Access Restrictions for Change) | AC-2 (L/M/H), AC-3 (L/M/H), AC-6 (M/H), AC-6(9) (M/H), AC-6(10) (M/H), IA-5 (L/M/H), CM-5 (M/H) | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), AC-6(9), AC-6(10), IA-5 (Authenticator Management), CM-5 (Access Restrictions for Change) |
-| Layer 3 — Encryption | SC-12 (Cryptographic Key Management), SC-13 (Cryptographic Protection), SC-28, SC-28(1) | SC-12 (L/M/H), SC-13 (L/M/H), SC-28 (M/H), SC-28(1) (M/H) | SC-12 (Cryptographic Key Establishment and Management), SC-13 (Cryptographic Protection), SC-28 (Protection of Information at Rest), SC-28(1) (Cryptographic Protection) |
-| Layer 4 — Configuration & Compliance | CM-2 (Baseline Configuration), CM-6 (Configuration Settings), CM-8 (System Component Inventory), SC-7 (Boundary Protection — RestrictedSshRule provides continuous detection of 0.0.0.0/0 SSH exposure, complementing the SCP's preventive control) | CM-2 (L/M/H), CM-6 (L/M/H), CM-8 (L/M/H), SC-7 (L/M/H) | CM-2 (Baseline Configuration), CM-6 (Configuration Settings), CM-8 (System Component Inventory), SC-7 (Boundary Protection) |
-| Layer 5 — Detection & Response | SI-3 (Malicious Code Protection), SI-4 (System Monitoring), IR-4 (Incident Handling), IR-5 (Incident Monitoring), IR-6 (Incident Reporting) | SI-3 (L/M/H), SI-4 (L/M/H), IR-4 (L/M/H), IR-5 (L/M/H), IR-6 (L/M/H) | SI-3 (Malicious Code Protection), SI-4 (System Monitoring), IR-4 (Incident Handling), IR-5 (Incident Monitoring), IR-6 (Incident Reporting) |
+| Layer 1: Logging and Monitoring | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9, AU-12 | AU-2 (L/M/H), AU-3 (L/M/H), AU-9 (L/M/H), AU-12 (L/M/H) | AU-2 (Event Logging), AU-3 (Content of Audit Records), AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) |
+| Layer 2: IAM Baseline | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), AC-6(9) (Log Use of Privileged Functions), AC-6(10) (Prohibit Non-Privileged Users from Privileged Functions), IA-5 (Authenticator Management), CM-5 (Access Restrictions for Change) | AC-2 (L/M/H), AC-3 (L/M/H), AC-6 (M/H), AC-6(9) (M/H), AC-6(10) (M/H), IA-5 (L/M/H), CM-5 (M/H) | AC-2 (Account Management), AC-3 (Access Enforcement), AC-6 (Least Privilege), AC-6(9), AC-6(10), IA-5 (Authenticator Management), CM-5 (Access Restrictions for Change) |
+| Layer 3: Encryption | SC-12 (Cryptographic Key Management), SC-13 (Cryptographic Protection), SC-28, SC-28(1) | SC-12 (L/M/H), SC-13 (L/M/H), SC-28 (M/H), SC-28(1) (M/H) | SC-12 (Cryptographic Key Establishment and Management), SC-13 (Cryptographic Protection), SC-28 (Protection of Information at Rest), SC-28(1) (Cryptographic Protection) |
+| Layer 4: Configuration & Compliance | CM-2 (Baseline Configuration), CM-6 (Configuration Settings), CM-8 (System Component Inventory), SC-7 (Boundary Protection; RestrictedSshRule provides continuous detection of 0.0.0.0/0 SSH exposure, complementing the SCP's preventive control) | CM-2 (L/M/H), CM-6 (L/M/H), CM-8 (L/M/H), SC-7 (L/M/H) | CM-2 (Baseline Configuration), CM-6 (Configuration Settings), CM-8 (System Component Inventory), SC-7 (Boundary Protection) |
+| Layer 5: Detection & Response | SI-3 (Malicious Code Protection), SI-4 (System Monitoring), IR-4 (Incident Handling), IR-5 (Incident Monitoring), IR-6 (Incident Reporting) | SI-3 (L/M/H), SI-4 (L/M/H), IR-4 (L/M/H), IR-5 (L/M/H), IR-6 (L/M/H) | SI-3 (Malicious Code Protection), SI-4 (System Monitoring), IR-4 (Incident Handling), IR-5 (Incident Monitoring), IR-6 (Incident Reporting) |
 | Secure S3 Bucket | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) | SC-28 (M/H), AC-3 (L/M/H) | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) |
 
 > **Note:** CJIS v6.0 now uses NIST 800-53 control identifiers directly, so the CJIS and NIST columns share the same control IDs. The distinction is that CJIS scopes these requirements specifically to Criminal Justice Information (CJI), while NIST 800-53 applies broadly to federal information systems.
@@ -93,41 +93,41 @@ Each control was selected to address specific compliance requirements across CJI
 
 ## Audit Relevance
 
-An assessor reviewing a FedRAMP High or CJIS v6.0 authorization package uses this baseline as the **primary technical control implementation evidence** for the AC, AU, IA, SC, CM, SI, and IR control families covered by Layers 1–5 and the five SCPs. The mapping table above is the assessment crosswalk; each control row points to the specific file (CloudFormation template or SCP JSON) the assessor requests during an EXAMINE procedure.
+An assessor reviewing a FedRAMP High or CJIS v6.0 authorization package can use this baseline as the primary technical control implementation evidence for the AC, AU, IA, SC, CM, SI, and IR control families covered by Layers 1–5 and the five SCPs. The mapping table above is the assessment crosswalk. Each control row points to the specific file (CloudFormation template or SCP JSON) the assessor requests during an EXAMINE procedure.
 
-For walkthrough-style assessments (FedRAMP NIST 800-53A): the templates ARE the as-built configuration documentation. An assessor asks *"show me how you enforce SC-28 at the EBS layer"* and the answer is `03-encryption.yaml`'s `EbsEncryptionByDefault` resource — the source-controlled artifact that *is* the implementation, not a screenshot of the AWS Console at a point in time. Git history is the change-control evidence (CM-3, CM-5) — every modification is reviewable, attributable, and rollback-capable.
+For walkthrough-style assessments (FedRAMP NIST 800-53A): the templates ARE the as-built configuration documentation. An assessor asks *"show me how you enforce SC-28 at the EBS layer"* and the answer is `03-encryption.yaml`'s `EbsEncryptionByDefault` resource. That source-controlled artifact is the implementation, not a screenshot of the AWS Console at a point in time. Git history is the change-control evidence (CM-3, CM-5). Every modification is reviewable, attributable, and rollback-capable.
 
-For continuous-monitoring assessments (CA-7): Layer 4's six managed Config Rules continuously evaluate Layers 1–3, producing AWS Config compliance evaluations as machine-readable evidence on every resource change. Layer 5's Security Hub aggregates these against the NIST 800-53 Rev 5 standard, becoming the single review surface for the assessor. The SCPs sit in front of all of it as preventive control evidence (AC-3, AU-9, SC-7, SC-13) — denials produce CloudTrail `AccessDenied` events that document the boundary working as designed.
+For continuous-monitoring assessments (CA-7): Layer 4's six managed Config Rules continuously evaluate Layers 1–3, producing AWS Config compliance evaluations as machine-readable evidence on every resource change. Layer 5's Security Hub aggregates these against the NIST 800-53 Rev 5 standard, becoming the single review surface for the assessor. The SCPs sit in front of all of it as preventive control evidence (AC-3, AU-9, SC-7, SC-13). Denials produce CloudTrail `AccessDenied` events that document the boundary working as designed.
 
 The release-gate review cycle (see issue history) extends this further: cross-layer integration findings (e.g., the SCP × Layer 4 Config delivery interaction in `UseExisting` mode) are tracked as POA&M items per CA-5 and remediated in versioned releases.
 
 ## FedRAMP 20x Alignment
 
-FedRAMP 20x restructures the program around **compliance-as-code, machine-readable evidence, continuous monitoring, API-driven evidence, and automated scanning**. This baseline targets the program directly:
+FedRAMP 20x restructures the program around compliance-as-code, machine-readable evidence, continuous monitoring, API-driven evidence, and automated scanning. This baseline targets those pillars:
 
-- **Compliance-as-code:** Every control is a CloudFormation template or SCP JSON in this repo. The compliance contract IS the code; drift is detectable via `cloudformation drift-detection` and `aws organizations describe-policy`.
-- **Machine-readable evidence:** Layer 4's Config Rules emit `Compliance` evaluations as JSON; Layer 5's Security Hub aggregates findings against the NIST 800-53 Rev 5 standard; SCP denials surface as CloudTrail `AccessDenied` events. Each is a structured JSON record consumable without human transcription.
-- **Continuous monitoring:** Layer 4 continuously evaluates the configuration baseline; Layer 5 continuously detects anomalies. Together they replace the FedRAMP annual / 3-year cadence with per-event evaluation against the same controls.
-- **API-driven evidence:** Every artifact this baseline produces is API-queryable — `aws configservice describe-compliance-by-resource`, `aws securityhub get-findings`, `aws cloudtrail lookup-events`. No console screenshots required.
+- **Compliance-as-code:** Every control is a CloudFormation template or SCP JSON in this repo. The compliance contract is the code. Drift is detectable via `cloudformation drift-detection` and `aws organizations describe-policy`.
+- **Machine-readable evidence:** Layer 4's Config Rules emit `Compliance` evaluations as JSON. Layer 5's Security Hub aggregates findings against the NIST 800-53 Rev 5 standard. SCP denials surface as CloudTrail `AccessDenied` events. Each is a structured JSON record consumable without human transcription.
+- **Continuous monitoring:** Layer 4 continuously evaluates the configuration baseline. Layer 5 continuously detects anomalies. Together they replace the FedRAMP annual / 3-year cadence with per-event evaluation against the same controls.
+- **API-driven evidence:** Every artifact this baseline produces is API-queryable: `aws configservice describe-compliance-by-resource`, `aws securityhub get-findings`, `aws cloudtrail lookup-events`. No console screenshots required.
 - **30-day vs 90-day review window:** The baseline's per-event JSON evidence stream fits the FedRAMP 20x 30-day machine-readable review SLA. Each Layer 4 compliance state change and each Layer 5 finding is a unit of input to that review.
 
-The baseline pairs with [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline) which transforms these JSON evidence streams into OSCAL Assessment Results (SAR) JSON for FedRAMP 20x submission packages. The August 2026 Terraform conversion (per the Sprint Plan) doubles as the CGE-P IaC Portfolio submission — Terraform + OPA/Rego + CI/CD pipeline + KSI dashboard delivered against this baseline's already-defined control set.
+The baseline pairs with [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline), which transforms these JSON evidence streams into OSCAL Assessment Results (SAR) JSON for FedRAMP 20x submission packages. The August 2026 Terraform conversion (per the Sprint Plan) also covers the CGE-P IaC Portfolio submission: Terraform + OPA/Rego + CI/CD pipeline + KSI dashboard delivered against this baseline's already-defined control set.
 
 ## CJIS v6.0 Relevance
 
-CJIS v6.0 (published Dec 27, 2024; default audit baseline from April 1, 2026; Priority 2-4 fully enforceable Oct 1, 2027) aligns with NIST 800-53 Rev 5 and introduces three material deltas that this baseline directly addresses:
+CJIS v6.0 (published Dec 27, 2024; default audit baseline from April 1, 2026; Priority 2-4 fully enforceable Oct 1, 2027) aligns with NIST 800-53 Rev 5. Three material deltas this baseline addresses:
 
-- **Agency-managed CMK only (SC-12, SC-13, SC-28).** Layer 3 provisions a customer-managed `AWS::KMS::Key` with an explicit key policy. AWS-managed encryption (SSE-S3, default EBS) is replaced everywhere CJI may flow — the Layer 1 CloudTrail log bucket SSE-KMS pass adopts the Layer 3 CMK; Layer 4's Config delivery bucket reuses the same key; Layer 5's SNS topic and DLQ optionally encrypt to the same key via the `ComplianceCmkArn` parameter. CJIS prohibits cloud-provider-held keys for CJI; the architecture forces an agency-CMK posture.
-- **1-year minimum audit retention (AU-9, AU-6).** Layer 1's CloudTrail log bucket uses S3 **Object Lock in COMPLIANCE mode** — neither root nor any IAM principal can delete a log object inside its retention window, providing the WORM-style 1-year retention CJIS requires. The CloudWatch hot mirror provides queryable access for the weekly review without compromising the cold archive.
+- **Agency-managed CMK only (SC-12, SC-13, SC-28).** Layer 3 provisions a customer-managed `AWS::KMS::Key` with an explicit key policy. AWS-managed encryption (SSE-S3, default EBS) is replaced everywhere CJI may flow. The Layer 1 CloudTrail log bucket SSE-KMS pass adopts the Layer 3 CMK. Layer 4's Config delivery bucket reuses the same key. Layer 5's SNS topic and DLQ optionally encrypt to the same key via the `ComplianceCmkArn` parameter. CJIS prohibits cloud-provider-held keys for CJI; the architecture forces an agency-CMK posture.
+- **1-year minimum audit retention (AU-9, AU-6).** Layer 1's CloudTrail log bucket uses S3 Object Lock in COMPLIANCE mode. Neither root nor any IAM principal can delete a log object inside its retention window. That is the WORM-style 1-year retention CJIS requires. The CloudWatch hot mirror provides queryable access for the weekly review without compromising the cold archive.
 - **CJI boundary protection (SC-7, AC-3).** The `scp-restrict-network-changes-by-region` SCP confines security-group changes to approved regions, preventing CJI traffic from being redirected into unapproved boundaries via VPC misconfiguration.
 
-The remaining CJIS-specific deltas (FIPS 140-3 boundary, fingerprint-based background check process, AAL2 MFA on IdP federation) are out of scope for the AWS-baseline layer and addressed elsewhere in the portfolio — see [`cjis-fedramp-high-gap-analysis`](https://github.com/0xBahalaNa/cjis-fedramp-high-gap-analysis) for the full delta inventory.
+The remaining CJIS-specific deltas (FIPS 140-3 boundary, fingerprint-based background check process, AAL2 MFA on IdP federation) are out of scope for the AWS-baseline layer. See [`cjis-fedramp-high-gap-analysis`](https://github.com/0xBahalaNa/cjis-fedramp-high-gap-analysis) for the full delta inventory.
 
 ## Sample Evidence Output
 
-The baseline produces three distinct classes of machine-readable evidence:
+The baseline produces three classes of machine-readable evidence:
 
-**1. SCP denial events** (CloudTrail) — preventive control evidence. When a principal attempts a denied action, CloudTrail records an `AccessDenied` event referencing the SCP:
+**1. SCP denial events** (CloudTrail): preventive control evidence. When a principal attempts a denied action, CloudTrail records an `AccessDenied` event referencing the SCP:
 
 ```json
 {
@@ -141,7 +141,7 @@ The baseline produces three distinct classes of machine-readable evidence:
 }
 ```
 
-**2. AWS Config compliance evaluation** (Layer 4) — continuous monitoring evidence. A resource is evaluated against a Config Rule on every configuration change:
+**2. AWS Config compliance evaluation** (Layer 4): continuous monitoring evidence. A resource is evaluated against a Config Rule on every configuration change:
 
 ```json
 {
@@ -155,12 +155,12 @@ The baseline produces three distinct classes of machine-readable evidence:
 }
 ```
 
-**3. Security Hub finding** (Layer 5) — detective control evidence aggregated against the NIST 800-53 Rev 5 standard:
+**3. Security Hub finding** (Layer 5): detective control evidence aggregated against the NIST 800-53 Rev 5 standard:
 
 ```json
 {
   "Id": "arn:aws:securityhub:us-east-1:123456789012:control/nist-800-53/v/5.0.0/AC-2/finding/...",
-  "Title": "AC-2(1) Automated System Account Management — Compliant",
+  "Title": "AC-2(1) Automated System Account Management - Compliant",
   "Severity": { "Label": "INFORMATIONAL" },
   "Compliance": { "Status": "PASSED" },
   "Resources": [{ "Type": "AwsIamUser", "Id": "arn:aws:iam::123456789012:user/auditor" }],
@@ -169,7 +169,7 @@ The baseline produces three distinct classes of machine-readable evidence:
 }
 ```
 
-All three are consumed by [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline) for transformation into OSCAL Assessment Results — closing the FedRAMP 20x detect → evaluate → retain → review loop end-to-end.
+[`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline) consumes all three for transformation into OSCAL Assessment Results.
 
 ## Repository Structure
 
@@ -192,7 +192,7 @@ aws-compliance-as-code/
 └── README.md
 ```
 
-The numbered CloudFormation prefixes (`01`–`05`) indicate deployment order; each layer builds on the one before it.
+The numbered CloudFormation prefixes (`01`–`05`) indicate deployment order. Each layer builds on the one before it.
 
 ## AWS Services Used
 
@@ -216,15 +216,15 @@ The numbered CloudFormation prefixes (`01`–`05`) indicate deployment order; ea
 
 ### Service Control Policies (Preventive Guardrails)
 
-SCPs are attached at the Organization Root and act as permission boundaries that override IAM, even for administrator users. They are preventive controls: non-compliant actions are denied before they execute, regardless of the IAM policies attached to the requesting principal. This makes them ideal for enforcing compliance boundaries that individual account configurations cannot circumvent.
+SCPs attach at the Organization Root and act as permission boundaries that override IAM, even for administrator users. They are preventive controls: non-compliant actions are denied before they execute, regardless of the IAM policies attached to the requesting principal. That makes them useful for enforcing compliance boundaries that individual account configurations cannot circumvent.
 
 ### CloudFormation (Compliant by Default)
 
-CloudFormation templates encode security requirements directly into resource definitions, so resources deploy in their intended secure state every time, eliminating configuration drift and manual misconfiguration. The templates are organized as numbered layers (`01-logging.yaml` → `02-iam-baseline.yaml` → `03-encryption.yaml` → `04-config.yaml`) that build on one another — Layer 3's KMS key, for example, is exported and adopted by both Layer 1's CloudTrail log bucket and Layer 4's Config delivery-channel bucket; Layer 4's managed Config Rules then continuously verify that Layers 1–3 stay compliant. Each template is auditable documentation of the intended secure state.
+CloudFormation templates encode security requirements directly into resource definitions, so resources deploy in their intended secure state every time. That cuts configuration drift and manual misconfiguration. The templates are organized as numbered layers (`01-logging.yaml` → `02-iam-baseline.yaml` → `03-encryption.yaml` → `04-config.yaml`) that build on one another. Layer 3's KMS key, for example, is exported and adopted by both Layer 1's CloudTrail log bucket and Layer 4's Config delivery-channel bucket. Layer 4's managed Config Rules then continuously verify that Layers 1–3 stay compliant. Each template is auditable documentation of the intended secure state.
 
 ### Defense in Depth
 
-SCPs prevent non-compliant actions at the organization level. CloudFormation ensures compliant defaults at the resource level. Git version control tracks every policy and template change, creating an auditable history that serves as evidence for compliance audits. This layered approach means a failure in one control does not compromise the overall security posture.
+SCPs prevent non-compliant actions at the organization level. CloudFormation ensures compliant defaults at the resource level. Git version control tracks every policy and template change, creating an auditable history I can present as evidence during audits. A failure in one control does not collapse the whole posture.
 
 ## Deployment
 
@@ -355,9 +355,9 @@ Example output:
 
 ### Step 3: Deploy the CloudFormation Layers
 
-Deploy the numbered templates in order — each layer builds on the previous. Layers 1–4 create named IAM resources, so `CAPABILITY_NAMED_IAM` is required for those; Layer 5 has no IAM resources but the same flag is harmless (it is a superset of `CAPABILITY_IAM`). (`secure-bucket.yaml` is a standalone foundational template and can be deployed independently.)
+Deploy the numbered templates in order. Each layer builds on the previous. Layers 1–4 create named IAM resources, so `CAPABILITY_NAMED_IAM` is required for those. Layer 5 has no IAM resources but the same flag is harmless (it is a superset of `CAPABILITY_IAM`). (`secure-bucket.yaml` is a standalone foundational template and can be deployed independently.)
 
-**Layer 1 — Logging & Monitoring.** Leave `LogsBucketCmkArn` unset for now; the CloudTrail log bucket uses SSE-S3 until the Layer 3 CMK exists.
+**Layer 1: Logging & Monitoring.** Leave `LogsBucketCmkArn` unset for now. The CloudTrail log bucket uses SSE-S3 until the Layer 3 CMK exists.
 
 ```
 aws cloudformation deploy \
@@ -367,7 +367,7 @@ aws cloudformation deploy \
     --parameter-overrides DefaultVpcId=<DEFAULT_VPC_ID>
 ```
 
-**Layer 2 — IAM Baseline.** Supply a long random `AdminRoleExternalId`.
+**Layer 2: IAM Baseline.** Supply a long random `AdminRoleExternalId`.
 
 ```
 aws cloudformation deploy \
@@ -377,9 +377,9 @@ aws cloudformation deploy \
     --parameter-overrides AdminRoleExternalId=<LONG_RANDOM_STRING>
 ```
 
-**Deploy-principal requirement for Layer 2 updates.** Once the boundary policies (`AdminPermissionsBoundary`, `BucketPolicyAdminBoundary`) are deployed, both contain a `DenyBoundarySelfMutation` statement that blocks the IAM verbs CloudFormation uses to update managed policies (`iam:CreatePolicyVersion`, `iam:SetDefaultPolicyVersion`, `iam:DeletePolicy`, `iam:DeletePolicyVersion`). Stack updates touching either boundary — and `cloudformation delete-stack` — must be executed AS a principal NOT capped by either boundary (the Org management account root or an external CI/CD role without these boundaries attached). `AdminRole` and `BucketPolicyAdminRole` are both bounded and cannot perform Layer 2 boundary updates. This is the inverse of Layer 1's rule: Layer 1 bucket-policy updates require the bounded `BucketPolicyAdminRole`; Layer 2 boundary updates require an unbounded principal.
+**Deploy-principal requirement for Layer 2 updates.** Once the boundary policies (`AdminPermissionsBoundary`, `BucketPolicyAdminBoundary`) are deployed, both contain a `DenyBoundarySelfMutation` statement that blocks the IAM verbs CloudFormation uses to update managed policies (`iam:CreatePolicyVersion`, `iam:SetDefaultPolicyVersion`, `iam:DeletePolicy`, `iam:DeletePolicyVersion`). Stack updates touching either boundary, and `cloudformation delete-stack`, must be executed AS a principal NOT capped by either boundary (the Org management account root or an external CI/CD role without these boundaries attached). `AdminRole` and `BucketPolicyAdminRole` are both bounded and cannot perform Layer 2 boundary updates. This is the inverse of Layer 1's rule: Layer 1 bucket-policy updates require the bounded `BucketPolicyAdminRole`; Layer 2 boundary updates require an unbounded principal.
 
-**Layer 3 — Encryption.** Pass the Layer 2 admin role as key administrator and the Layer 2 auditor role as key user (so it can decrypt CloudTrail logs for evidence collection).
+**Layer 3: Encryption.** Pass the Layer 2 admin role as key administrator and the Layer 2 auditor role as key user (so it can decrypt CloudTrail logs for evidence collection).
 
 ```
 aws cloudformation deploy \
@@ -393,7 +393,7 @@ aws cloudformation deploy \
             --query "Stacks[0].Outputs[?OutputKey=='AuditorRoleArn'].OutputValue" --output text)
 ```
 
-**Second pass — wire the CMK AND the bucket-policy lockdown into Layer 1.** Re-deploy Layer 1 with both the Layer 3 CMK ARN (switches the CloudTrail bucket to SSE-KMS) and the Layer 2 `BucketPolicyAdminRoleArn` (activates the bucket-config lockdown). `AuditAdminRoleArn` is a `CommaDelimitedList` — pass the primary `BucketPolicyAdminRoleArn` and optionally append one or more break-glass roles for primary-loss redundancy (e.g., `AuditAdminRoleArn=arn1,arn2`). The lockdown denies every principal NOT in the carve-out list from modifying bucket policy / ACL / encryption / public-access-block / Object-Lock config / lifecycle / versioning / CORS / notifications / logging / replication / tagging / ownership-controls / bucket deletion (note: `s3:DeleteBucket` is intentionally denied — even the carved-out roles cannot delete the bucket without first widening their inline grants in Layer 2, preserving audit evidence). Root is NOT carved out — root cannot bypass an explicit S3 resource-policy Deny, so an exemption would add bypass surface (per AWS docs, account-root in `NotPrincipal` exempts every in-account IAM principal) and no recovery value. The carve-out uses `ArnNotEquals` on `aws:PrincipalArn` against the list (case- and form-tolerant; supersedes the case-sensitive `StringNotEquals` form), not `NotPrincipal`. Two-pass by design: Layer 1 is numbered first but its encryption key and bucket-policy admin role are created in later layers.
+**Second pass: wire the CMK AND the bucket-policy lockdown into Layer 1.** Re-deploy Layer 1 with both the Layer 3 CMK ARN (switches the CloudTrail bucket to SSE-KMS) and the Layer 2 `BucketPolicyAdminRoleArn` (activates the bucket-config lockdown). `AuditAdminRoleArn` is a `CommaDelimitedList`. Pass the primary `BucketPolicyAdminRoleArn` and optionally append one or more break-glass roles for primary-loss redundancy (e.g., `AuditAdminRoleArn=arn1,arn2`). The lockdown denies every principal NOT in the carve-out list from modifying bucket policy / ACL / encryption / public-access-block / Object-Lock config / lifecycle / versioning / CORS / notifications / logging / replication / tagging / ownership-controls / bucket deletion (note: `s3:DeleteBucket` is intentionally denied. Even the carved-out roles cannot delete the bucket without first widening their inline grants in Layer 2, preserving audit evidence). Root is NOT carved out. Root cannot bypass an explicit S3 resource-policy Deny, so an exemption would add bypass surface (per AWS docs, account-root in `NotPrincipal` exempts every in-account IAM principal) and no recovery value. The carve-out uses `ArnNotEquals` on `aws:PrincipalArn` against the list (case- and form-tolerant; supersedes the case-sensitive `StringNotEquals` form), not `NotPrincipal`. Two-pass by design: Layer 1 is numbered first but its encryption key and bucket-policy admin role are created in later layers.
 
 ```
 aws cloudformation deploy \
@@ -410,11 +410,11 @@ aws cloudformation deploy \
 
 **Silent-disable warning.** CloudFormation does not carry parameter values forward by default. Any future Layer 1 deploy that omits `AuditAdminRoleArn` (or `LogsBucketCmkArn`) defaults the value to `""`, flips the corresponding `Lock*` condition to false, and silently REMOVES the Deny statement / reverts SSE-KMS to SSE-S3. Use `ParameterKey=AuditAdminRoleArn,UsePreviousValue=true` in CI/CD, or always pass the full parameter set explicitly.
 
-**Deploy-principal requirement (post-lockdown).** Any subsequent Layer 1 stack update that itself modifies the bucket policy must be executed AS one of the carved-out roles (`BucketPolicyAdminRole` or any break-glass role passed alongside it in `AuditAdminRoleArn`) — any other principal hits the lockdown Deny and the stack update rolls back. Assume the role via `aws sts assume-role` before running `cloudformation deploy` on Layer 1.
+**Deploy-principal requirement (post-lockdown).** Any subsequent Layer 1 stack update that itself modifies the bucket policy must be executed AS one of the carved-out roles (`BucketPolicyAdminRole` or any break-glass role passed alongside it in `AuditAdminRoleArn`). Any other principal hits the lockdown Deny and the stack update rolls back. Assume the role via `aws sts assume-role` before running `cloudformation deploy` on Layer 1.
 
-**Cross-stack lifecycle + recovery note.** Layer 1 references the Layer 2 `BucketPolicyAdminRole` via a raw string parameter, not `Fn::ImportValue` — CloudFormation cannot detect the dependency. If the Layer 2 stack is deleted, or `BucketPolicyAdminRole` is deleted out-of-band (manual console action, drift), Layer 1's lockdown becomes **unfixable from within the account**: the Deny still exists on the bucket policy, but the carved-out principal no longer exists, and root cannot bypass an explicit S3 resource-policy Deny. Recovery requires opening an AWS Support ticket to forcibly remove or rewrite the bucket policy. Mitigations: (1) enable stack-termination protection on the Layer 2 stack (`aws cloudformation update-termination-protection --enable-termination-protection`); (2) never delete `BucketPolicyAdminRole` out-of-band without first removing the lockdown clause from the bucket policy via that role; (3) treat this as the recovery RTO for any Layer 2 stack-delete drill.
+**Cross-stack lifecycle + recovery note.** Layer 1 references the Layer 2 `BucketPolicyAdminRole` via a raw string parameter, not `Fn::ImportValue`. CloudFormation cannot detect the dependency. If the Layer 2 stack is deleted, or `BucketPolicyAdminRole` is deleted out-of-band (manual console action, drift), Layer 1's lockdown becomes **unfixable from within the account**: the Deny still exists on the bucket policy, but the carved-out principal no longer exists, and root cannot bypass an explicit S3 resource-policy Deny. Recovery requires opening an AWS Support ticket to forcibly remove or rewrite the bucket policy. Mitigations: (1) enable stack-termination protection on the Layer 2 stack (`aws cloudformation update-termination-protection --enable-termination-protection`); (2) never delete `BucketPolicyAdminRole` out-of-band without first removing the lockdown clause from the bucket policy via that role; (3) treat this as the recovery RTO for any Layer 2 stack-delete drill.
 
-**Layer 4 — Configuration & Compliance.** Pass the Layer 3 CMK ARN; the CMK and the Config bucket must be in the same region. Deploy after the Layer 1 second pass so the rules evaluate against the final SSE-KMS state. **If the account already has AWS Config enabled in this region** (Control Tower, console-onboarding, or a prior stack), add `ManageConfigService=UseExisting` to the overrides — the stack then creates only the six Config Rules, which evaluate against the existing recorder.
+**Layer 4: Configuration & Compliance.** Pass the Layer 3 CMK ARN. The CMK and the Config bucket must be in the same region. Deploy after the Layer 1 second pass so the rules evaluate against the final SSE-KMS state. **If the account already has AWS Config enabled in this region** (Control Tower, console-onboarding, or a prior stack), add `ManageConfigService=UseExisting` to the overrides. The stack then creates only the six Config Rules, which evaluate against the existing recorder.
 
 ```
 aws cloudformation deploy \
@@ -425,7 +425,7 @@ aws cloudformation deploy \
         --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
-**Layer 5 — Detection & Response.** Provide the email address for high-severity alerts. SNS sends a confirmation email — the subscription is **not** active until the recipient clicks the link, so after deploy run `aws sns list-subscriptions-by-topic` (the stack's `PostDeployVerification` output gives the exact command) to confirm `SubscriptionArn != "PendingConfirmation"`. **If the account already has GuardDuty or Security Hub enabled** (Control Tower, console, or a prior stack), add `ManageDetectionServices=UseExisting` to skip the singleton resources (the NIST 800-53 Rev 5 standard subscription still runs — Control Tower / console hubs default to AWS FSBP, not NIST 800-53). **To encrypt the SNS topic and DLQ with the Layer 3 agency CMK** (carries the SC-28 / CJIS 5.10.1.2 story through), also pass `ComplianceCmkArn`:
+**Layer 5: Detection & Response.** Provide the email address for high-severity alerts. SNS sends a confirmation email. The subscription is **not** active until the recipient clicks the link, so after deploy run `aws sns list-subscriptions-by-topic` (the stack's `PostDeployVerification` output gives the exact command) to confirm `SubscriptionArn != "PendingConfirmation"`. **If the account already has GuardDuty or Security Hub enabled** (Control Tower, console, or a prior stack), add `ManageDetectionServices=UseExisting` to skip the singleton resources (the NIST 800-53 Rev 5 standard subscription still runs. Control Tower / console hubs default to AWS FSBP, not NIST 800-53). **To encrypt the SNS topic and DLQ with the Layer 3 agency CMK** (carries the SC-28 / CJIS 5.10.1.2 story through), also pass `ComplianceCmkArn`:
 
 ```
 aws cloudformation deploy \
@@ -483,26 +483,6 @@ aws cloudformation delete-stack \
 ```
 
 </details>
-
-## Key Takeaways
-
-- **Compliance as Code eliminates drift**: By encoding security requirements in CloudFormation, resources are provisioned correctly every time without relying on manual configuration.
-
-- **SCPs enforce boundaries that IAM cannot**: Organization-level policies override even administrator permissions, providing a compliance layer that individual account configurations cannot circumvent.
-
-- **Defense in depth through layered controls**: Preventive SCPs combined with compliant-by-default IaC creates multiple enforcement points, so a failure in one layer does not compromise the security posture.
-
-- **Automation reduces human error**: Codified controls eliminate the inconsistency of manual reviews and create a repeatable, scalable compliance process.
-
-- **Version control as audit evidence**: Every policy change is tracked in Git, providing a complete history that serves as compliance evidence during audits.
-
-## What This Project Demonstrates
-
-This project demonstrates the core GRC Engineering skill of translating compliance framework requirements into enforceable AWS controls. It showcases hands-on experience with AWS Organizations policy design, SCP authoring with condition-based logic, CloudFormation template development, and compliance framework mapping across CJIS Security Policy, FedRAMP, and NIST 800-53. The inclusion of CJIS and FedRAMP mappings reflects relevance to criminal justice environments and federal cloud authorization requirements.
-
-The controls illustrate a range of enforcement patterns — action-scoped denials (CloudTrail log deletion), principal-scoped denials (root-user lockdown via `NotAction` plus an `aws:PrincipalArn` condition), region-conditioned rules (network changes confined to approved regions), and encryption mandates (S3 uploads required to use SSE-KMS) — alongside a layered, compliant-by-default CloudFormation baseline. Together they demonstrate the flexibility of SCPs and infrastructure-as-code as compliance enforcement mechanisms.
-
-This foundation positions the project for expansion into CI/CD pipeline guardrails, drift-remediation automation (auto-remediation Config Rules), and multi-account architectures with OU-scoped policies.
 
 ## References
 
