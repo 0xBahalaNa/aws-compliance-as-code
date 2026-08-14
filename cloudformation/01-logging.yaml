@@ -3,11 +3,11 @@ Description: >-
   Layer 1 - Logging & Monitoring. Deploys a multi-region CloudTrail with a
   tamper-proof S3 log bucket (Object Lock in COMPLIANCE mode), a CloudWatch
   Log Group for near-real-time delivery, and a VPC Flow Log on the default
-  VPC. Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.0
+  VPC. Satisfies NIST 800-53 Rev 5 AU-2, AU-3, AU-9, AU-12. Partial CJIS v6.1
   5.4.1 - integrity controls in place; S3 long-term store encryption-at-rest
   closes by passing the Layer 3 CMK ARN to the LogsBucketCmkArn parameter
   (agency-managed key). CloudWatch Logs hot-mirror remains under AWS-managed
-  encryption; full CJI-at-rest (5.10.1.2) closure deferred to v1.2.0.
+  encryption; full CJI-at-rest (SC-28(1)) closure deferred to v1.2.0.
   Bucket-policy lockdown (s3:PutBucketPolicy / s3:DeleteBucketPolicy denied
   to everyone except the Layer 2 audit admin role) wires in via the optional
   AuditAdminRoleArn parameter - same two-pass pattern as the CMK. Every
@@ -66,7 +66,7 @@ Parameters:
       not exist yet, so the logs bucket falls back to SSE-S3 (AES256).
       After Layer 3 is deployed, update this stack with the CMK ARN to
       switch the bucket to SSE-KMS with the agency-managed key (SC-28 /
-      CJIS 5.10.1.2). Two-pass by design: Layer 1 is numbered first but
+      CJIS SC-28(1)). Two-pass by design: Layer 1 is numbered first but
       its encryption key is created in Layer 3.
 
   AuditAdminRoleArn:
@@ -159,7 +159,7 @@ Resources:
         ServerSideEncryptionConfiguration:
           # SSE-KMS with the Layer 3 agency-managed CMK once its ARN is
           # wired in via LogsBucketCmkArn; SSE-S3 (AES256) as the
-          # pre-Layer-3 fallback. CJIS v6.0 5.10.1.2 requires an
+          # pre-Layer-3 fallback. CJIS v6.1 SC-28(1) requires an
           # agency-managed key for CJI at rest - the CMK branch closes
           # that gap; AES256 alone uses an AWS-managed key.
           - ServerSideEncryptionByDefault:

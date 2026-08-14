@@ -12,8 +12,8 @@ Description: >-
   the ManageConfigService parameter: pass UseExisting when the account already
   has AWS Config enabled in this region (Control Tower, console-onboarding,
   another stack) and only the rules are created, evaluating against the
-  existing recorder. Satisfies NIST 800-53 Rev 5 CM-2, CM-6, CM-8; CJIS v6.0
-  5.10.4.1.
+  existing recorder. Satisfies NIST 800-53 Rev 5 CM-2, CM-6, CM-8; CJIS v6.1
+  CM-6.
 
 Parameters:
   ConfigCmkArn:
@@ -23,7 +23,7 @@ Parameters:
     Description: >-
       ARN of the Layer 3 compliance CMK (03-encryption.yaml output
       ComplianceCmkArn). Encrypts the Config delivery bucket with the
-      agency-managed key (SC-28 / CJIS 5.10.1.2). The CMK MUST be in the
+      agency-managed key (SC-28(1) agency-managed key delta). The CMK MUST be in the
       same AWS region as this stack: S3 SSE-KMS requires a same-region key,
       so passing a cross-region ARN fails bucket creation with
       KMS.NotFoundException. Required even when ManageConfigService=
@@ -365,7 +365,7 @@ Resources:
           - AWS::S3::Bucket
 
   # Strict CJIS check: S3 buckets must use SSE-KMS (not SSE-S3 / AES256).
-  # The AWS-managed aws/s3 key does not satisfy CJIS 5.10.1.2's
+  # The AWS-managed aws/s3 key does not satisfy CJIS SC-28(1)'s
   # agency-managed-key requirement; this rule surfaces any bucket relying
   # on it. The secure-bucket.yaml legacy template and the pre-second-pass
   # Layer 1 bucket will report NON_COMPLIANT here - that is the intended
@@ -374,7 +374,7 @@ Resources:
     Type: AWS::Config::ConfigRule
     Properties:
       ConfigRuleName: s3-default-encryption-kms
-      Description: Verifies S3 buckets default to SSE-KMS (CJIS 5.10.1.2 - agency-managed key).
+      Description: Verifies S3 buckets default to SSE-KMS (CJIS SC-28(1) - agency-managed key).
       Source:
         Owner: AWS
         SourceIdentifier: S3_DEFAULT_ENCRYPTION_KMS

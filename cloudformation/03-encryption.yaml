@@ -5,7 +5,7 @@ Description: >-
   key usage; a stable alias; and account-level EBS encryption-by-default (via a
   Lambda-backed custom resource) pointed at the CMK. The CMK ARN is exported so
   Layer 1 can adopt it for the CloudTrail logs bucket. Satisfies NIST 800-53
-  Rev 5 SC-12, SC-13, SC-28, SC-28(1). CJIS v6.0 5.10.1.2 - agency-managed key
+  Rev 5 SC-12, SC-13, SC-28, SC-28(1). CJIS v6.1 SC-28(1) - agency-managed key
   for CJI at rest; an AWS-managed key would place AWS personnel in CJIS scope.
 
 Parameters:
@@ -52,8 +52,8 @@ Parameters:
 
 Resources:
 
-  # The customer-managed CMK. This is the "agency-managed key" CJIS v6.0
-  # (5.10.1.2) requires for CJI at rest: the account - not AWS - owns the key
+  # The customer-managed CMK. This is the "agency-managed key" CJIS v6.1
+  # SC-28(1) requires for CJI at rest: the account - not AWS - owns the key
   # policy and the key lifecycle, so AWS personnel cannot decrypt data
   # protected by it. An AWS-managed key (aws/s3, aws/ebs) cannot satisfy this
   # because AWS controls that key's policy.
@@ -69,7 +69,7 @@ Resources:
     Properties:
       Description: >-
         Compliance baseline CMK. Encrypts CloudTrail logs (S3) and EBS volumes
-        at rest. NIST 800-53 SC-12 / SC-13 / SC-28; CJIS v6.0 5.10.1.2.
+        at rest. NIST 800-53 SC-12 / SC-13 / SC-28; CJIS v6.1 SC-28(1).
       KeySpec: SYMMETRIC_DEFAULT
       KeyUsage: ENCRYPT_DECRYPT
       # Single-region key. CLAUDE.md: do not span regions unless the control
@@ -312,7 +312,7 @@ Resources:
                       # survives stack teardown and the account EBS default
                       # can safely keep referencing it. Resetting to the
                       # AWS-managed aws/ebs key here would be a silent CJIS
-                      # 5.10.1.2 regression; decommissioning the CMK is a
+                      # SC-28(1) regression; decommissioning the CMK is a
                       # deliberate, separate action.
                       pass
                   cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, PHYSICAL_ID)

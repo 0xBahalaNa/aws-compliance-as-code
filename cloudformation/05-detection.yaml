@@ -12,7 +12,7 @@ Description: >-
   always wired up. SNS and SQS encrypt with the optional Layer 3 CMK when
   ComplianceCmkArn is supplied, otherwise the AWS-managed alias/aws/sns
   and alias/aws/sqs keys. Satisfies NIST 800-53 Rev 5 SI-3, SI-4, IR-4,
-  IR-5, IR-6; CJIS v6.0 5.10.4.2.
+  IR-5, IR-6; CJIS v6.1 IR-5/IR-6.
 
 Parameters:
   SecurityAlertEmail:
@@ -53,7 +53,7 @@ Parameters:
       Optional ARN of the Layer 3 compliance CMK (03-encryption.yaml output
       ComplianceCmkArn). When supplied, the SNS topic AND SQS DLQ are
       encrypted with the agency-managed CMK (carries the SC-28 / CJIS
-      5.10.1.2 story forward). When empty (the default), they fall back
+      SC-28(1) story forward). When empty (the default), they fall back
       to the AWS-managed alias/aws/sns and alias/aws/sqs keys. The Layer 3
       CMK key policy must allow sns.amazonaws.com and sqs.amazonaws.com
       GenerateDataKey for this option to work - the Layer 3 template
