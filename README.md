@@ -2,7 +2,7 @@
 ![CloudFormation](https://img.shields.io/badge/IaC-CloudFormation-blue?style=flat&logo=amazonwebservices)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat)
 ![Compliance](https://img.shields.io/badge/Compliance-as%20Code-blueviolet?style=flat)
-![CJIS](https://img.shields.io/badge/CJIS-Security%20Policy%20v6.0-cc0000?style=flat)
+![CJIS](https://img.shields.io/badge/CJIS-Security%20Policy%20v6.1-cc0000?style=flat)
 ![FedRAMP](https://img.shields.io/badge/FedRAMP-High%20Baseline-0071bc?style=flat)
 ![NIST 800-53](https://img.shields.io/badge/NIST-800--53%20Rev%205-004990?style=flat)
 
@@ -43,7 +43,7 @@ SCPs attach at the Organization Root and enforce preventive guardrails across al
 
 ### CJIS Security Policy
 
-The FBI's [CJIS Security Policy](https://le.fbi.gov/file-repository/cjis_security_policy_v6-0_20241227.pdf) sets security requirements for any organization that accesses, stores, or transmits Criminal Justice Information (CJI). That includes law enforcement agencies, cloud providers hosting CJI, and contractors supporting criminal justice systems. Version 6.0 (released December 2024) restructured the policy from 13 to 20 policy areas, now organized by NIST 800-53 control families: Access Control (AC), Auditing and Accountability (AU), Configuration Management (CM), Systems and Communications Protection (SC), and others. Controls use NIST 800-53 identifiers directly. Version 6.0 introduces priority levels (P1 through P4) for phased implementation, with FBI audits underway as of October 2025 and full compliance expected by October 2027.
+The FBI's [CJIS Security Policy](https://le.fbi.gov/file-repository/cjis_security_policy_v6-1_20260625.pdf) sets security requirements for any organization that accesses, stores, or transmits Criminal Justice Information (CJI). That includes law enforcement agencies, cloud providers hosting CJI, and contractors supporting criminal justice systems. Version 6.0 (released December 2024) restructured the policy from 13 to 20 policy areas, now organized by NIST 800-53 control families: Access Control (AC), Auditing and Accountability (AU), Configuration Management (CM), Systems and Communications Protection (SC), and others. Controls use NIST 800-53 identifiers directly. Version 6.0 introduces priority levels (P1 through P4) for phased implementation, with FBI audits underway as of October 2025 and full compliance expected by October 2027.
 
 ### FedRAMP
 
@@ -73,7 +73,7 @@ The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fe
 
 Each control addresses specific requirements across CJIS Security Policy, FedRAMP, and NIST 800-53. Preventive SCPs and compliant-by-default IaC templates create layered enforcement. SCPs act as guardrails that IAM administrators cannot bypass. CloudFormation ensures new resources meet baseline security requirements without manual configuration.
 
-| Control / Component | CJIS Security Policy (v6.0) | FedRAMP Baseline | NIST 800-53 Rev. 5 |
+| Control / Component | CJIS Security Policy (v6.1) | FedRAMP Baseline | NIST 800-53 Rev. 5 |
 |---|---|---|---|
 | Deny Audit Log Deletion | AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) | AU-9 (L/M/H), AU-12 (L/M/H) | AU-9 (Protection of Audit Information), AU-12 (Audit Record Generation) |
 | Deny Root User Usage | AC-6 (Least Privilege), AC-3 (Access Enforcement) | AC-6 (M/H), AC-3 (L/M/H) | AC-6 (Least Privilege), AC-3 (Access Enforcement) |
@@ -87,13 +87,13 @@ Each control addresses specific requirements across CJIS Security Policy, FedRAM
 | Layer 5: Detection & Response | SI-3 (Malicious Code Protection), SI-4 (System Monitoring), IR-4 (Incident Handling), IR-5 (Incident Monitoring), IR-6 (Incident Reporting) | SI-3 (L/M/H), SI-4 (L/M/H), IR-4 (L/M/H), IR-5 (L/M/H), IR-6 (L/M/H) | SI-3 (Malicious Code Protection), SI-4 (System Monitoring), IR-4 (Incident Handling), IR-5 (Incident Monitoring), IR-6 (Incident Reporting) |
 | Secure S3 Bucket | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) | SC-28 (M/H), AC-3 (L/M/H) | SC-28 (Protection of Information at Rest), AC-3 (Access Enforcement) |
 
-> **Note:** CJIS v6.0 now uses NIST 800-53 control identifiers directly, so the CJIS and NIST columns share the same control IDs. The distinction is that CJIS scopes these requirements specifically to Criminal Justice Information (CJI), while NIST 800-53 applies broadly to federal information systems.
+> **Note:** CJIS v6.x uses NIST 800-53 control identifiers directly, so the CJIS and NIST columns share the same control IDs. The distinction is that CJIS scopes these requirements specifically to Criminal Justice Information (CJI), while NIST 800-53 applies broadly to federal information systems.
 
 > **FedRAMP Baseline Key:** L = Low, M = Moderate, H = High
 
 ## Audit Relevance
 
-An assessor reviewing a FedRAMP High or CJIS v6.0 authorization package can use this baseline as the primary technical control implementation evidence for the AC, AU, IA, SC, CM, SI, and IR control families covered by Layers 1–5 and the five SCPs. The mapping table above is the assessment crosswalk. Each control row points to the specific file (CloudFormation template or SCP JSON) the assessor requests during an EXAMINE procedure.
+An assessor reviewing a FedRAMP High or CJIS v6.1 authorization package can use this baseline as the primary technical control implementation evidence for the AC, AU, IA, SC, CM, SI, and IR control families covered by Layers 1–5 and the five SCPs. The mapping table above is the assessment crosswalk. Each control row points to the specific file (CloudFormation template or SCP JSON) the assessor requests during an EXAMINE procedure.
 
 For walkthrough-style assessments (FedRAMP NIST 800-53A): the templates ARE the as-built configuration documentation. An assessor asks *"show me how you enforce SC-28 at the EBS layer"* and the answer is `03-encryption.yaml`'s `EbsEncryptionByDefault` resource. That source-controlled artifact is the implementation, not a screenshot of the AWS Console at a point in time. Git history is the change-control evidence (CM-3, CM-5). Every modification is reviewable, attributable, and rollback-capable.
 
@@ -113,9 +113,9 @@ FedRAMP 20x restructures the program around compliance-as-code, machine-readable
 
 The baseline pairs with [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline), which transforms these JSON evidence streams into OSCAL Assessment Results (SAR) JSON for FedRAMP 20x submission packages. The August 2026 Terraform conversion (per the Sprint Plan) also covers the CGE-P IaC Portfolio submission: Terraform + OPA/Rego + CI/CD pipeline + KSI dashboard delivered against this baseline's already-defined control set.
 
-## CJIS v6.0 Relevance
+## CJIS v6.1 Relevance
 
-CJIS v6.0 (published Dec 27, 2024; default audit baseline from April 1, 2026; Priority 2-4 fully enforceable Oct 1, 2027) aligns with NIST 800-53 Rev 5. Three material deltas this baseline addresses:
+CJIS Security Policy v6.1 (released June 25, 2026) is the current policy, aligned with NIST 800-53 Rev 5. v6.x has been the default audit baseline since April 1, 2026 (v5.9.5 sunset March 31, 2026); modernized Priority 2-4 controls are fully enforceable Oct 1, 2027 (timing varies by state CSA). Three material deltas this baseline addresses:
 
 - **Agency-managed CMK only (SC-12, SC-13, SC-28).** Layer 3 provisions a customer-managed `AWS::KMS::Key` with an explicit key policy. AWS-managed encryption (SSE-S3, default EBS) is replaced everywhere CJI may flow. The Layer 1 CloudTrail log bucket SSE-KMS pass adopts the Layer 3 CMK. Layer 4's Config delivery bucket reuses the same key. Layer 5's SNS topic and DLQ optionally encrypt to the same key via the `ComplianceCmkArn` parameter. CJIS prohibits cloud-provider-held keys for CJI; the architecture forces an agency-CMK posture.
 - **1-year minimum audit retention (AU-9, AU-6).** Layer 1's CloudTrail log bucket uses S3 Object Lock in COMPLIANCE mode. Neither root nor any IAM principal can delete a log object inside its retention window. That is the WORM-style 1-year retention CJIS requires. The CloudWatch hot mirror provides queryable access for the weekly review without compromising the cold archive.
@@ -425,7 +425,7 @@ aws cloudformation deploy \
         --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
-**Layer 5: Detection & Response.** Provide the email address for high-severity alerts. SNS sends a confirmation email. The subscription is **not** active until the recipient clicks the link, so after deploy run `aws sns list-subscriptions-by-topic` (the stack's `PostDeployVerification` output gives the exact command) to confirm `SubscriptionArn != "PendingConfirmation"`. **If the account already has GuardDuty or Security Hub enabled** (Control Tower, console, or a prior stack), add `ManageDetectionServices=UseExisting` to skip the singleton resources (the NIST 800-53 Rev 5 standard subscription still runs. Control Tower / console hubs default to AWS FSBP, not NIST 800-53). **To encrypt the SNS topic and DLQ with the Layer 3 agency CMK** (carries the SC-28 / CJIS 5.10.1.2 story through), also pass `ComplianceCmkArn`:
+**Layer 5: Detection & Response.** Provide the email address for high-severity alerts. SNS sends a confirmation email. The subscription is **not** active until the recipient clicks the link, so after deploy run `aws sns list-subscriptions-by-topic` (the stack's `PostDeployVerification` output gives the exact command) to confirm `SubscriptionArn != "PendingConfirmation"`. **If the account already has GuardDuty or Security Hub enabled** (Control Tower, console, or a prior stack), add `ManageDetectionServices=UseExisting` to skip the singleton resources (the NIST 800-53 Rev 5 standard subscription still runs. Control Tower / console hubs default to AWS FSBP, not NIST 800-53). **To encrypt the SNS topic and DLQ with the Layer 3 agency CMK** (carries the SC-28(1) agency-managed key delta story through), also pass `ComplianceCmkArn`:
 
 ```
 aws cloudformation deploy \
@@ -488,7 +488,7 @@ aws cloudformation delete-stack \
 
 The following resources informed the design of this project:
 
-- [FBI CJIS Security Policy v6.0](https://le.fbi.gov/file-repository/cjis_security_policy_v6-0_20241227.pdf)
+- [FBI CJIS Security Policy v6.1](https://le.fbi.gov/file-repository/cjis_security_policy_v6-1_20260625.pdf)
 - [FedRAMP Security Controls Baselines](https://www.fedramp.gov/baselines/)
 - [GRC Engineering for AWS by AJ Yawn](https://ajyawn.com/books)
 - [GRC Engineering for AWS Chapter 5 Repository](https://github.com/ajy0127/thegrcengineeringbook/tree/master/chapter-5)

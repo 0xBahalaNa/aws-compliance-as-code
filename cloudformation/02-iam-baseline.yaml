@@ -25,9 +25,9 @@ Description: >-
   PutBucketPolicy). Both boundary policies carry DenyBoundarySelfMutation,
   blocking the four ManagedPolicy mutation verbs on both boundary ARNs to
   close the boundary-self-rewrite escalation. Satisfies NIST 800-53 Rev 5
-  AC-2, AC-3, AC-6, AC-6(9), AC-6(10), IA-5, CM-5. Partial CJIS v6.0
-  5.6.2.1 (password attributes via IA-5); AAL2 phishing-resistant MFA
-  (5.6.2.2 / IA-2) deferred to IAM Identity Center work.
+  AC-2, AC-3, AC-6, AC-6(9), AC-6(10), IA-5, CM-5. Partial CJIS v6.1
+  IA-5 (password attributes); AAL2 phishing-resistant MFA
+  (IA-2) deferred to IAM Identity Center work.
 
 Parameters:
   MinimumPasswordLength:
@@ -36,7 +36,7 @@ Parameters:
     MinValue: 14
     MaxValue: 128
     Description: >-
-      Minimum password length. FedRAMP High baseline is 12; CJIS v6.0 aligns
+      Minimum password length. FedRAMP High baseline is 12; CJIS v6.1 aligns
       with NIST 800-63B (8+ recommended for AAL1, 14+ for AAL2 with memorized
       secrets). 14 is the conservative pick that covers both.
 
