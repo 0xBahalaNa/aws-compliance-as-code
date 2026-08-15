@@ -10,7 +10,7 @@
 
 I implement compliance controls as code using AWS Service Control Policies (SCPs) and CloudFormation. Manual compliance checks do not scale. So I built automated guardrails that block non-compliant actions at the AWS Organization level and deploy secure infrastructure by default.
 
-The controls map to CJIS Security Policy, FedRAMP, and NIST 800-53. The point is to show how those frameworks turn into enforceable cloud policies, not just documentation.
+The controls map to CJIS Security Policy, FedRAMP, and NIST 800-53. The point is showing how those frameworks turn into enforceable cloud policies, not paperwork.
 
 ## Architecture Overview
 
