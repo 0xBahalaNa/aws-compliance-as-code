@@ -41,17 +41,7 @@ SCPs attach at the Organization Root and enforce preventive guardrails across al
 
 ## Compliance Frameworks
 
-### CJIS Security Policy
-
-The FBI's [CJIS Security Policy](https://le.fbi.gov/file-repository/cjis_security_policy_v6-1_20260625.pdf) sets security requirements for any organization that accesses, stores, or transmits Criminal Justice Information (CJI). That includes law enforcement agencies, cloud providers hosting CJI, and contractors supporting criminal justice systems. Version 6.0 (released December 2024) restructured the policy from 13 to 20 policy areas, now organized by NIST 800-53 control families: Access Control (AC), Auditing and Accountability (AU), Configuration Management (CM), Systems and Communications Protection (SC), and others. Controls use NIST 800-53 identifiers directly. Version 6.0 introduces priority levels (P1 through P4) for phased implementation, with FBI audits underway as of October 2025 and full compliance expected by October 2027.
-
-### FedRAMP
-
-The [Federal Risk and Authorization Management Program (FedRAMP)](https://www.fedramp.gov/) standardizes security assessments for cloud service providers (CSPs) serving federal agencies. FedRAMP defines three authorization baselines (Low, Moderate, and High) that map to the FIPS 199 impact level of the data. Each baseline specifies required NIST 800-53 controls. This project targets FedRAMP High, which applies to systems processing the government's most sensitive unclassified data.
-
-### NIST SP 800-53 Rev. 5
-
-[NIST Special Publication 800-53 Revision 5](https://csf.tools/reference/sp-800-53/r5/) is the control catalog for federal information systems. Both CJIS and FedRAMP build on it. Controls are organized into families (AC for Access Control, AU for Audit, SC for System and Communications Protection, CM for Configuration Management) and give the technical specificity needed to turn compliance requirements into enforceable infrastructure policies.
+Three frameworks stack here. [NIST SP 800-53 Rev 5](https://csf.tools/reference/sp-800-53/r5/) is the control catalog. [FedRAMP](https://www.fedramp.gov/) High is the baseline for the government's most sensitive unclassified data, drawn from that catalog. The FBI's [CJIS Security Policy](https://le.fbi.gov/file-repository/cjis_security_policy_v6-1_20260625.pdf) scopes the same NIST control identifiers specifically to Criminal Justice Information, which is why the CJIS and NIST columns below share IDs. The CJIS v6.x timeline and the three deltas this baseline actually addresses are in [CJIS v6.1 Relevance](#cjis-v61-relevance).
 
 ## Controls Implemented
 
