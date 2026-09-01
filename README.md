@@ -12,6 +12,12 @@ I implement compliance controls as code using AWS Service Control Policies (SCPs
 
 The controls map to CJIS Security Policy, FedRAMP, and NIST 800-53. The point is showing how those frameworks turn into enforceable cloud policies, not paperwork.
 
+## Impact
+
+The manual alternative is configuring each control by hand in the console, per account, and evidencing it with screenshots: a point-in-time picture of settings that can drift the next day, collected again from scratch every assessment cycle. Detection of a violated control happens whenever a human next looks.
+
+Here the same baseline deploys repeatably into member accounts from five numbered templates with per-account parameters, five SCPs make the highest-risk actions (deleting a trail, using root, writing unencrypted objects) technically impossible rather than merely detected, and the evidence is API-queryable JSON: Config evaluations, Security Hub findings, and CloudTrail `AccessDenied` events that document the guardrail working. Configuration effort collapses from per-account console work to the documented `aws cloudformation deploy` sequence, and evidence collection from screenshot assembly to a query.
+
 ## Architecture Overview
 
 ```mermaid
