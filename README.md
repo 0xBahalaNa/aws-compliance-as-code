@@ -8,9 +8,12 @@
 
 # AWS Compliance as Code
 
-I implement compliance controls as code using AWS Service Control Policies (SCPs) and CloudFormation. Manual compliance checks do not scale. So I built automated guardrails that block non-compliant actions at the AWS Organization level and deploy secure infrastructure by default.
+**Every misconfiguration an assessor finds after the fact is a remediation cycle paid for twice: once to fix it, once to re-evidence it. Manual console checks and screenshot evidence drift the next day.** This repo makes the highest-risk actions technically impossible at the organization level and deploys a compliant-by-default baseline into every member account.
 
-The controls map to CJIS Security Policy, FedRAMP, and NIST 800-53. The point is showing how those frameworks turn into enforceable cloud policies, not paperwork.
+- Five Service Control Policies deny trail deletion, root usage, unencrypted writes, and out-of-region network changes before they happen
+- Five numbered CloudFormation templates lay down CloudTrail, IAM, KMS, Config, GuardDuty, and Security Hub with per-account parameters
+- Evidence is API-queryable JSON (Config evaluations, Security Hub findings, CloudTrail `AccessDenied` events), not screenshots
+- NIST 800-53 Rev 5 / FedRAMP High / CJIS Security Policy
 
 ## Impact
 
