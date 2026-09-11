@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars (gitignored). Do not terraform apply (R-5).
+
+# Required. Layer 2 admin role ARN once M3 ships that role.
+key_administrator_role_arn = "arn:aws:iam::<account-id>:role/<admin-role-name>"
