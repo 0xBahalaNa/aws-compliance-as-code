@@ -2,3 +2,6 @@
 
 # Required. Layer 2 admin role ARN once M3 ships that role.
 key_administrator_role_arn = "arn:aws:iam::<account-id>:role/<admin-role-name>"
+
+# Required. Default VPC for Flow Logs (Layer 1).
+default_vpc_id = "vpc-<your-default-vpc-id>"

@@ -54,11 +54,14 @@ data "aws_iam_policy_document" "compliance_cmk" {
     }
   }
 
-  # Statement 3: CloudTrail KEY USER (envelope encryption). aws:SourceAccount is the confused-deputy guard.
+  # Statement 3: CloudTrail KEY USER (envelope encryption). aws:SourceAccount is
+  # the confused-deputy guard. kms:Decrypt is required to create an SSE-KMS trail
+  # whose bucket has S3 Bucket Keys enabled (01-logging.tf), per the CloudTrail
+  # key-policy docs; GenerateDataKey* alone is not enough.
   statement {
     sid       = "AllowCloudTrailToEncryptLogs"
     effect    = "Allow"
-    actions   = ["kms:GenerateDataKey*", "kms:DescribeKey"]
+    actions   = ["kms:GenerateDataKey*", "kms:Decrypt", "kms:DescribeKey"]
     resources = ["*"]
     principals {
       type        = "Service"
@@ -127,6 +130,27 @@ data "aws_iam_policy_document" "compliance_cmk" {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  # Statement 8: CloudWatch Logs service principal (Layer 1 log groups). The
+  # CFN left both groups on AWS-managed encryption; the port puts them on this
+  # CMK (R-1), which only works if logs.<region> can use the key. Scoped by
+  # encryption context to log groups in this account and region, not by
+  # aws:SourceAccount (CloudWatch Logs does not set it).
+  statement {
+    sid       = "AllowCloudWatchLogsUsage"
+    effect    = "Allow"
+    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["logs.${data.aws_region.current.region}.amazonaws.com"]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "kms:EncryptionContext:aws:logs:arn"
+      values   = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:*"]
     }
   }
 }
