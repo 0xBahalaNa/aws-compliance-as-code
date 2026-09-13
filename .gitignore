@@ -2,3 +2,9 @@
 # Configures the AI assistant's behavior for this repo on the maintainer's
 # machine; it is not part of the deployable compliance baseline.
 CLAUDE.md
+
+# Terraform local state and plugin cache. terraform.tfvars.example stays
+# tracked; *.tfvars does not match a .example suffix.
+.terraform/
+*.tfstate*
+*.tfvars
