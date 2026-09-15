@@ -49,3 +49,40 @@ variable "pending_deletion_window_days" {
     error_message = "Pending deletion window must be between 7 and 30 days."
   }
 }
+
+# Layer 1
+
+variable "trail_name" {
+  type        = string
+  default     = "org-cloudtrail"
+  description = "Name of the multi-region CloudTrail trail."
+}
+
+variable "cloudtrail_retention_days" {
+  type        = number
+  default     = 365
+  description = "CloudWatch retention for the CloudTrail group. Object Lock is the long-term store."
+  validation {
+    condition     = contains([30, 60, 90, 180, 365, 400, 545, 731, 1827, 3653], var.cloudtrail_retention_days)
+    error_message = "Must be a CloudWatch Logs retention AWS accepts: 30, 60, 90, 180, 365, 400, 545, 731, 1827, or 3653."
+  }
+}
+
+variable "flow_logs_retention_days" {
+  type        = number
+  default     = 90
+  description = "CloudWatch retention for the VPC Flow Logs group. Default 90; volume is 10-100x CloudTrail."
+  validation {
+    condition     = contains([30, 60, 90, 180, 365, 400, 545, 731, 1827, 3653], var.flow_logs_retention_days)
+    error_message = "Must be a CloudWatch Logs retention AWS accepts: 30, 60, 90, 180, 365, 400, 545, 731, 1827, or 3653."
+  }
+}
+
+variable "default_vpc_id" {
+  type        = string
+  description = "VPC to attach Flow Logs to. Required; no default-VPC intrinsic."
+  validation {
+    condition     = can(regex("^vpc-", var.default_vpc_id))
+    error_message = "Must be a VPC id (starts with vpc-)."
+  }
+}

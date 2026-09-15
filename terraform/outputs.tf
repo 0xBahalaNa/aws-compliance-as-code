@@ -1,3 +1,24 @@
+output "cloudtrail_logs_bucket_name" {
+  description = "S3 bucket holding immutable CloudTrail logs."
+  value       = aws_s3_bucket.cloudtrail_logs.id
+}
+output "cloudtrail_logs_bucket_arn" {
+  description = "ARN of the CloudTrail logs bucket. M4 scopes BucketPolicyAdminRole to this."
+  value       = aws_s3_bucket.cloudtrail_logs.arn
+}
+output "cloudtrail_arn" {
+  description = "ARN of the multi-region trail."
+  value       = aws_cloudtrail.main.arn
+}
+output "cloudtrail_log_group_arn" {
+  description = "CloudWatch Log Group ARN for CloudTrail (metric filters / alarms)."
+  value       = aws_cloudwatch_log_group.cloudtrail.arn
+}
+output "flow_logs_group_arn" {
+  description = "CloudWatch Log Group ARN for VPC Flow Logs."
+  value       = aws_cloudwatch_log_group.flow_logs.arn
+}
+
 output "compliance_cmk_arn" {
   description = "ARN of the compliance baseline CMK. Read-out for evidence collection; in-module callers use aws_kms_key.compliance.arn directly."
   value       = aws_kms_key.compliance.arn
