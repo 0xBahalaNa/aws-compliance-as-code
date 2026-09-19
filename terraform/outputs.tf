@@ -18,6 +18,18 @@ output "flow_logs_group_arn" {
   description = "CloudWatch Log Group ARN for VPC Flow Logs."
   value       = aws_cloudwatch_log_group.flow_logs.arn
 }
+output "auditor_role_arn" {
+  description = "ARN of the read-only auditor role."
+  value       = aws_iam_role.auditor.arn
+}
+output "admin_role_arn" {
+  description = "ARN of the boundary-capped admin role. Break-glass only."
+  value       = aws_iam_role.admin.arn
+}
+output "admin_permissions_boundary_arn" {
+  description = "ARN of AdminPermissionsBoundary."
+  value       = aws_iam_policy.admin_boundary.arn
+}
 
 output "compliance_cmk_arn" {
   description = "ARN of the compliance baseline CMK. Read-out for evidence collection; in-module callers use aws_kms_key.compliance.arn directly."

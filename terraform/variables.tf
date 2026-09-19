@@ -86,3 +86,63 @@ variable "default_vpc_id" {
     error_message = "Must be a VPC id (starts with vpc-)."
   }
 }
+
+# Layer 2
+
+variable "minimum_password_length" {
+  type        = number
+  default     = 14
+  description = "IAM password minimum. 14 covers FedRAMP High (12) and CJIS/NIST 800-63B AAL2 guidance."
+  validation {
+    condition     = var.minimum_password_length >= 14 && var.minimum_password_length <= 128
+    error_message = "Minimum password length must be between 14 and 128."
+  }
+}
+
+variable "max_password_age_days" {
+  type        = number
+  default     = 90
+  description = "Days before IAM passwords expire. 90 is the historical FedRAMP/CJIS baseline."
+  validation {
+    condition     = var.max_password_age_days >= 1 && var.max_password_age_days <= 1095
+    error_message = "Max password age must be between 1 and 1095 days."
+  }
+}
+
+variable "password_reuse_prevention" {
+  type        = number
+  default     = 24
+  description = "Prior passwords blocked from reuse. 24 is the IAM max and the FedRAMP High value."
+  validation {
+    condition     = var.password_reuse_prevention >= 1 && var.password_reuse_prevention <= 24
+    error_message = "Password reuse prevention must be between 1 and 24."
+  }
+}
+
+variable "admin_role_external_id" {
+  type        = string
+  sensitive   = true
+  description = "sts:ExternalId required to assume AdminRole. Set a long random string in terraform.tfvars."
+  validation {
+    condition     = length(var.admin_role_external_id) >= 16
+    error_message = "ExternalId must be at least 16 characters."
+  }
+}
+
+variable "admin_role_suffix" {
+  type        = string
+  default     = "admin"
+  description = "AdminRole name and the matching Deny ARN inside AdminPermissionsBoundary."
+}
+
+variable "auditor_role_suffix" {
+  type        = string
+  default     = "auditor"
+  description = "AuditorRole name. No permissions boundary; the Deny can reference its ARN directly."
+}
+
+variable "bucket_policy_admin_role_suffix" {
+  type        = string
+  default     = "bucket-policy-admin"
+  description = "Name M4 will give BucketPolicyAdminRole. The M3 Deny already uses this string."
+}
