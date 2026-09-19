@@ -1,7 +1,10 @@
 # Copy to terraform.tfvars (gitignored). Do not terraform apply (R-5).
 
-# Required. Layer 2 admin role ARN once M3 ships that role.
-key_administrator_role_arn = "arn:aws:iam::<account-id>:role/<admin-role-name>"
+# Required. Layer 2 AdminRole ARN after apply: arn:aws:iam::<account-id>:role/admin
+key_administrator_role_arn = "arn:aws:iam::<account-id>:role/admin"
 
 # Required. Default VPC for Flow Logs (Layer 1).
 default_vpc_id = "vpc-<your-default-vpc-id>"
+
+# Required. sts:ExternalId for AdminRole assume (16+ chars).
+admin_role_external_id = "CHANGEME-set-a-long-random-string"

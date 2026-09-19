@@ -74,11 +74,17 @@ data "aws_iam_policy_document" "compliance_cmk" {
     }
   }
 
-  # Statement 4 (AllowKeyUsage: Decrypt + DescribeKey for the auditor role,
-  # AC-6) lands in M3. The CFN took that principal as a KeyUserRoleArns
-  # parameter; the port drops the parameter and references the role resource
-  # directly, so the statement waits on aws_iam_role.auditor rather than on an
-  # ARN an operator would otherwise hand-supply twice.
+  # Statement 4: auditor KEY USER (AC-6). Decrypt + DescribeKey only.
+  statement {
+    sid       = "AllowKeyUsage"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:DescribeKey"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = [aws_iam_role.auditor.arn]
+    }
+  }
 
   # Statement 5: SNS service principal (Layer 5 alert topic). Confused-deputy guard: aws:SourceAccount.
   statement {
