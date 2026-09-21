@@ -3,7 +3,7 @@ output "cloudtrail_logs_bucket_name" {
   value       = aws_s3_bucket.cloudtrail_logs.id
 }
 output "cloudtrail_logs_bucket_arn" {
-  description = "ARN of the CloudTrail logs bucket. M4 scopes BucketPolicyAdminRole to this."
+  description = "ARN of the CloudTrail logs bucket. BucketPolicyAdminRole is scoped to this."
   value       = aws_s3_bucket.cloudtrail_logs.arn
 }
 output "cloudtrail_arn" {
@@ -29,6 +29,14 @@ output "admin_role_arn" {
 output "admin_permissions_boundary_arn" {
   description = "ARN of AdminPermissionsBoundary."
   value       = aws_iam_policy.admin_boundary.arn
+}
+output "bucket_policy_admin_role_arn" {
+  description = "ARN of the CloudTrail bucket-policy carve-out role. Layer 1 DenyBucketConfigTamperingExceptAuditAdmin carves this principal out."
+  value       = aws_iam_role.bucket_policy_admin.arn
+}
+output "bucket_policy_admin_boundary_arn" {
+  description = "ARN of BucketPolicyAdminBoundary. Attach to any other principal that must stay inside the 15-action CloudTrail-bucket cap."
+  value       = aws_iam_policy.bucket_policy_admin_boundary.arn
 }
 
 output "compliance_cmk_arn" {

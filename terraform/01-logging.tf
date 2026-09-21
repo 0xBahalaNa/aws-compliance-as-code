@@ -43,8 +43,10 @@ resource "aws_s3_bucket_public_access_block" "cloudtrail_logs" {
   restrict_public_buckets = true
 }
 
-# Statements 1-4 of CloudTrailLogsBucketPolicy. Statement 5
-# (DenyBucketConfigTamperingExceptAuditAdmin) waits on M4's bucket_policy_admin role.
+# Statements 1-5 of CloudTrailLogsBucketPolicy. Statement 5 is the lockdown:
+# Deny the 15 bucket-config verbs unless the caller is BucketPolicyAdminRole.
+# DeleteBucket is in this Deny but not in local.bucket_policy_admin_actions —
+# the carve-out cannot delete the bucket (intentional asymmetry from 01-logging.yaml).
 
 data "aws_iam_policy_document" "cloudtrail_logs" {
   statement {
@@ -108,6 +110,37 @@ data "aws_iam_policy_document" "cloudtrail_logs" {
       test     = "Bool"
       variable = "aws:SecureTransport"
       values   = ["false"]
+    }
+  }
+  statement {
+    sid    = "DenyBucketConfigTamperingExceptAuditAdmin"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = [
+      "s3:PutBucketPolicy",
+      "s3:DeleteBucketPolicy",
+      "s3:PutBucketAcl",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutEncryptionConfiguration",
+      "s3:PutBucketObjectLockConfiguration",
+      "s3:PutLifecycleConfiguration",
+      "s3:PutBucketVersioning",
+      "s3:PutBucketCORS",
+      "s3:PutBucketNotification",
+      "s3:PutBucketLogging",
+      "s3:PutReplicationConfiguration",
+      "s3:PutBucketTagging",
+      "s3:PutBucketOwnershipControls",
+      "s3:DeleteBucket",
+    ]
+    resources = [aws_s3_bucket.cloudtrail_logs.arn]
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = [aws_iam_role.bucket_policy_admin.arn]
     }
   }
 }
