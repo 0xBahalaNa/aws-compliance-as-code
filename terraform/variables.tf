@@ -144,5 +144,5 @@ variable "auditor_role_suffix" {
 variable "bucket_policy_admin_role_suffix" {
   type        = string
   default     = "bucket-policy-admin"
-  description = "Name M4 will give BucketPolicyAdminRole. The M3 Deny already uses this string."
+  description = "BucketPolicyAdminRole name. AdminPermissionsBoundary Deny already uses this string."
 }

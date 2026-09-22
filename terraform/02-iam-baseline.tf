@@ -1,4 +1,5 @@
-# Layer 2 IAM core (AC-2/3/6, IA-5, CM-5): password policy, boundary, auditor/admin.
+# Layer 2 IAM core (AC-2/3/6, IA-5, CM-5): password policy, boundary, auditor/admin,
+# plus the Layer 1 bucket-policy carve-out role (AC-6, CM-6).
 
 resource "aws_iam_account_password_policy" "compliance" {
   minimum_password_length        = var.minimum_password_length
@@ -197,4 +198,67 @@ resource "aws_iam_role_policy_attachment" "admin_administrator" {
   #checkov:skip=CKV_AWS_274: Same as aws_iam_role.admin; attachment is how provider 6 attaches managed policies.
   role       = aws_iam_role.admin.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+# Cap, not a grant. AdminPermissionsBoundary denies s3:PutBucketPolicy, so this
+# role exists to do that one job. Identity ∩ boundary share local.bucket_policy_admin_actions (#24).
+# Self-ARN is string-built (document <-> policy cycle); admin boundary ARN is a live ref.
+data "aws_iam_policy_document" "bucket_policy_admin_boundary" {
+  #checkov:skip=CKV_AWS_109: DenyBoundaryDetachment is Resource "*" because IAM has no condition key for "this role's boundary."
+  #checkov:skip=CKV_AWS_111: Deny statements constrain write verbs; the Allow is the 15-action cap on one bucket.
+  statement {
+    sid       = "CapToCloudTrailBucketConfig"
+    effect    = "Allow"
+    actions   = local.bucket_policy_admin_actions
+    resources = [aws_s3_bucket.cloudtrail_logs.arn]
+  }
+  statement {
+    sid    = "DenyBoundarySelfMutation"
+    effect = "Deny"
+    actions = [
+      "iam:CreatePolicyVersion", "iam:SetDefaultPolicyVersion",
+      "iam:DeletePolicy", "iam:DeletePolicyVersion",
+    ]
+    resources = [
+      aws_iam_policy.admin_boundary.arn,
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${local.bucket_policy_admin_boundary_name}",
+    ]
+  }
+  statement {
+    sid       = "DenyBoundaryDetachment"
+    effect    = "Deny"
+    actions   = ["iam:DeleteRolePermissionsBoundary"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "bucket_policy_admin_boundary" {
+  name        = local.bucket_policy_admin_boundary_name
+  description = "Maximum permissions cap for BucketPolicyAdminRole. S3 bucket-config on the CloudTrail logs bucket only."
+  policy      = data.aws_iam_policy_document.bucket_policy_admin_boundary.json
+  tags        = { Layer = "2-IAM" }
+}
+
+data "aws_iam_policy_document" "bucket_policy_admin" {
+  statement {
+    sid       = "ManageCloudTrailBucketConfig"
+    effect    = "Allow"
+    actions   = local.bucket_policy_admin_actions
+    resources = [aws_s3_bucket.cloudtrail_logs.arn]
+  }
+}
+
+# Trust reuses admin_trust (MFA + ExternalId). Dedicated boundary recaps to the same 15 actions.
+resource "aws_iam_role" "bucket_policy_admin" {
+  name                 = var.bucket_policy_admin_role_suffix
+  description          = "Narrow break-glass role permitted to modify the CloudTrail bucket policy. Not AdminRole: that boundary denies PutBucketPolicy."
+  assume_role_policy   = data.aws_iam_policy_document.admin_trust.json
+  permissions_boundary = aws_iam_policy.bucket_policy_admin_boundary.arn
+  tags                 = { Layer = "2-IAM" }
+}
+
+resource "aws_iam_role_policy" "bucket_policy_admin" {
+  name   = "BucketPolicyAdmin"
+  role   = aws_iam_role.bucket_policy_admin.id
+  policy = data.aws_iam_policy_document.bucket_policy_admin.json
 }
