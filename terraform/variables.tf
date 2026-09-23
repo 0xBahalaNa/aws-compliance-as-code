@@ -146,3 +146,31 @@ variable "bucket_policy_admin_role_suffix" {
   default     = "bucket-policy-admin"
   description = "BucketPolicyAdminRole name. AdminPermissionsBoundary Deny already uses this string."
 }
+
+# Layer 4. Password checks reuse the Layer 2 variables; no new password inputs.
+
+variable "config_snapshot_delivery_frequency" {
+  type        = string
+  default     = "Twelve_Hours"
+  description = "How often Config writes a full snapshot. Configuration changes are recorded continuously either way."
+  validation {
+    condition = contains([
+      "One_Hour",
+      "Three_Hours",
+      "Six_Hours",
+      "Twelve_Hours",
+      "TwentyFour_Hours",
+    ], var.config_snapshot_delivery_frequency)
+    error_message = "Must be One_Hour, Three_Hours, Six_Hours, Twelve_Hours, or TwentyFour_Hours."
+  }
+}
+
+variable "config_bucket_object_lock_days" {
+  type        = number
+  default     = 365
+  description = "Object Lock COMPLIANCE retention on the Config bucket. 365 is the FedRAMP High AU-11 floor."
+  validation {
+    condition     = var.config_bucket_object_lock_days >= 1
+    error_message = "Object Lock retention must be at least 1 day."
+  }
+}
