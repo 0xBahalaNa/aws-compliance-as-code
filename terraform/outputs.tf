@@ -51,3 +51,19 @@ output "compliance_cmk_alias_name" {
   description = "Alias of the compliance baseline CMK."
   value       = aws_kms_alias.compliance.name
 }
+output "config_bucket_name" {
+  description = "S3 bucket holding Config snapshots and configuration history."
+  value       = aws_s3_bucket.config.id
+}
+output "config_bucket_arn" {
+  description = "ARN of the Config delivery bucket."
+  value       = aws_s3_bucket.config.arn
+}
+output "config_recorder_name" {
+  description = "Name of the configuration recorder."
+  value       = aws_config_configuration_recorder.main.name
+}
+output "config_recorder_role_arn" {
+  description = "ARN of the IAM role the configuration recorder assumes."
+  value       = aws_iam_role.config_recorder.arn
+}
