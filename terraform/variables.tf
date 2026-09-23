@@ -164,13 +164,3 @@ variable "config_snapshot_delivery_frequency" {
     error_message = "Must be One_Hour, Three_Hours, Six_Hours, Twelve_Hours, or TwentyFour_Hours."
   }
 }
-
-variable "config_bucket_object_lock_days" {
-  type        = number
-  default     = 365
-  description = "Object Lock COMPLIANCE retention on the Config bucket. 365 is the FedRAMP High AU-11 floor."
-  validation {
-    condition     = var.config_bucket_object_lock_days >= 1
-    error_message = "Object Lock retention must be at least 1 day."
-  }
-}

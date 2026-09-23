@@ -5,10 +5,13 @@
 resource "aws_s3_bucket" "config" {
   #checkov:skip=CKV_AWS_18: This bucket is the Config delivery destination; access logging to itself is circular.
   #checkov:skip=CKV_AWS_144: Single-region baseline (R-3); replication is out of scope.
-  #checkov:skip=CKV2_AWS_61: 04-config.yaml has no lifecycle rule; Object Lock COMPLIANCE retains objects.
+  #checkov:skip=CKV2_AWS_61: 04-config.yaml has no lifecycle rule; DenyObjectDeletion and versioning retain objects.
   #checkov:skip=CKV2_AWS_62: 04-config.yaml has no event notifications on the delivery bucket.
-  # Region in the name: one recorder per region, so a second region must not collide.
-  bucket              = "aws-config-${data.aws_region.current.region}-${data.aws_caller_identity.current.account_id}"
+  # Region in the name keeps the bucket unique; the IAM role name is account-global.
+  bucket = "aws-config-${data.aws_region.current.region}-${data.aws_caller_identity.current.account_id}"
+  # Object Lock on, no default retention. Config does not support delivery to a
+  # bucket with default retention, so 04-config.yaml's COMPLIANCE rule is dropped:
+  # https://docs.aws.amazon.com/config/latest/developerguide/manage-delivery-channel.html
   object_lock_enabled = true
   tags                = { Layer = "4-Config" }
   lifecycle { prevent_destroy = true } # CFN DeletionPolicy / UpdateReplacePolicy Retain
@@ -16,16 +19,6 @@ resource "aws_s3_bucket" "config" {
 resource "aws_s3_bucket_versioning" "config" {
   bucket = aws_s3_bucket.config.id
   versioning_configuration { status = "Enabled" }
-}
-resource "aws_s3_bucket_object_lock_configuration" "config" {
-  bucket = aws_s3_bucket.config.id
-  rule {
-    default_retention {
-      mode = "COMPLIANCE"
-      days = var.config_bucket_object_lock_days
-    }
-  }
-  depends_on = [aws_s3_bucket_versioning.config]
 }
 resource "aws_s3_bucket_server_side_encryption_configuration" "config" {
   bucket = aws_s3_bucket.config.id
@@ -246,7 +239,9 @@ resource "aws_config_config_rule" "s3_encryption_enabled" {
 
 resource "aws_config_config_rule" "s3_kms_encryption" {
   name        = "s3-default-encryption-kms"
-  description = "Verifies S3 buckets default to SSE-KMS rather than SSE-S3 (CM-6). The AWS-managed aws/s3 key still passes."
+  description = "Verifies S3 buckets default to SSE-KMS with the agency CMK (CJIS SC-28(1)). The AWS-managed aws/s3 key fails."
+  # kmsKeyArns pins the check to the CMK; without it any KMS key, including aws/s3, passes.
+  input_parameters = jsonencode({ kmsKeyArns = aws_kms_key.compliance.arn })
   source {
     owner             = "AWS"
     source_identifier = "S3_DEFAULT_ENCRYPTION_KMS"
@@ -281,7 +276,9 @@ resource "aws_config_config_rule" "iam_password_policy" {
 
 resource "aws_config_config_rule" "encrypted_volumes" {
   name        = "encrypted-volumes"
-  description = "Verifies attached EBS volumes are encrypted (CM-6 / SC-28, Layer 3)."
+  description = "Verifies attached EBS volumes are encrypted with the agency CMK (CM-6 / SC-28(1), Layer 3)."
+  # kmsId pins the check to the CMK; without it a volume on aws/ebs passes.
+  input_parameters = jsonencode({ kmsId = aws_kms_key.compliance.arn })
   source {
     owner             = "AWS"
     source_identifier = "ENCRYPTED_VOLUMES"
