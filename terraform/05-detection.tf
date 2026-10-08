@@ -1,7 +1,8 @@
 # Layer 5 detection and response (SI-3, SI-4, IR-4, IR-5, IR-6). Always
-# managed; the CloudFormation UseExisting switch is not carried. SNS and the
-# DLQ use the Layer 3 CMK (key policy statements AllowSnsServiceUsage and
-# AllowSqsServiceUsage). LOW and MEDIUM findings stay in Security Hub.
+# managed; the CloudFormation UseExisting switch is not carried. EventBridge
+# encrypts both the SNS publish and the DLQ send with the Layer 3 CMK
+# (AllowEventBridgeToPublishToEncryptedTopic). LOW and MEDIUM findings stay
+# in Security Hub.
 
 resource "aws_sqs_queue" "security_alert_dlq" {
   name                      = "compliance-alert-dlq"
@@ -158,7 +159,8 @@ resource "aws_cloudwatch_event_target" "high_severity" {
 }
 
 # Hub default (EnableDefaultStandards unset in 05-detection.yaml) turns on
-# Foundational Security Best Practices. The template's two Standard resources
+# Foundational Security Best Practices and CIS AWS Foundations Benchmark v1.2.0.
+# The template's two Standard resources
 # are the same NIST ARN under Provision vs UseExisting; UseExisting is dropped.
 resource "aws_securityhub_account" "main" {
   enable_default_standards = true

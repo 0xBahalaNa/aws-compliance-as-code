@@ -120,9 +120,9 @@ data "aws_iam_policy_document" "compliance_cmk" {
     }
   }
 
-  # Statement 7: EventBridge publishing to the CMK-encrypted alert topic.
-  # SNS does not honor aws:SourceAccount or aws:SourceArn on this call, so
-  # those conditions would still drop the finding.
+  # Statement 7: EventBridge publishing to the CMK-encrypted alert topic and
+  # writing the DLQ. SNS does not honor aws:SourceAccount or aws:SourceArn on
+  # this call, so those conditions would still drop the finding.
   statement {
     sid       = "AllowEventBridgeToPublishToEncryptedTopic"
     effect    = "Allow"
