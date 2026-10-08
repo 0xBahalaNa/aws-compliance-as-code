@@ -150,7 +150,7 @@ resource "aws_s3_bucket_policy" "cloudtrail_logs" {
 }
 
 # CFN used AWS-managed encryption on both groups. CMK now (R-1); the key policy
-# grants logs.<region> in 03-encryption.tf Statement 8.
+# grants logs.<region> via AllowCloudWatchLogsUsage.
 
 resource "aws_cloudwatch_log_group" "cloudtrail" {
   name              = "/aws/cloudtrail/${var.trail_name}"

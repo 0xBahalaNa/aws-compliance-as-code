@@ -8,3 +8,6 @@ default_vpc_id = "vpc-<your-default-vpc-id>"
 
 # Required. sts:ExternalId for AdminRole assume (16+ chars).
 admin_role_external_id = "CHANGEME-set-a-long-random-string"
+
+# Required. Layer 5 alert recipient.
+security_alert_email = "alerts@example.com"

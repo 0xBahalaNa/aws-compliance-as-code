@@ -424,6 +424,8 @@ aws cloudformation deploy \
         --query "Stacks[0].Outputs[?OutputKey=='ComplianceCmkArn'].OutputValue" --output text)
 ```
 
+**Config bucket policy is break-glass.** Layer 2's `BucketPolicyAdminRole` can change the Layer 1 CloudTrail bucket policy. No role in this baseline can change the Layer 4 Config bucket policy the same way. `AdminPermissionsBoundary` denies `s3:PutBucketPolicy` on every resource, and `BucketPolicyAdminRole` is scoped to the CloudTrail bucket only. Amending the Config bucket policy means temporarily detaching that boundary. The account root user detaches `AdminPermissionsBoundary`, which works because SCPs do not bind the management account. I left the asymmetry in place: nothing here needs to amend that policy after the first deploy, so a second carve-out role would be speculative.
+
 **Layer 5: Detection & Response.** Provide the email address for high-severity alerts. SNS sends a confirmation email. The subscription is **not** active until the recipient clicks the link, so after deploy run `aws sns list-subscriptions-by-topic` (the stack's `PostDeployVerification` output gives the exact command) to confirm `SubscriptionArn != "PendingConfirmation"`. **If the account already has GuardDuty or Security Hub enabled** (Control Tower, console, or a prior stack), add `ManageDetectionServices=UseExisting` to skip the singleton resources (the NIST 800-53 Rev 5 standard subscription still runs. Control Tower / console hubs default to AWS FSBP, not NIST 800-53). **To encrypt the SNS topic and DLQ with the Layer 3 agency CMK** (carries the SC-28(1) agency-managed key delta story through), also pass `ComplianceCmkArn`:
 
 ```
