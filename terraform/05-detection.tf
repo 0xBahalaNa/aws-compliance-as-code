@@ -160,8 +160,7 @@ resource "aws_cloudwatch_event_target" "high_severity" {
 
 # Hub default (EnableDefaultStandards unset in 05-detection.yaml) turns on
 # Foundational Security Best Practices and CIS AWS Foundations Benchmark v1.2.0.
-# The template's two Standard resources
-# are the same NIST ARN under Provision vs UseExisting; UseExisting is dropped.
+# The template's two Standard resources are the same NIST ARN under Provision vs UseExisting; UseExisting is dropped.
 resource "aws_securityhub_account" "main" {
   enable_default_standards = true
 }
