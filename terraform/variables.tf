@@ -164,3 +164,15 @@ variable "config_snapshot_delivery_frequency" {
     error_message = "Must be One_Hour, Three_Hours, Six_Hours, Twelve_Hours, or TwentyFour_Hours."
   }
 }
+
+# Layer 5
+
+variable "security_alert_email" {
+  type        = string
+  description = "Email that receives HIGH-severity GuardDuty alerts. The SNS subscription stays pending until the recipient confirms."
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.security_alert_email))
+    error_message = "Must be an email address."
+  }
+}

@@ -67,3 +67,19 @@ output "config_recorder_role_arn" {
   description = "ARN of the IAM role the configuration recorder assumes."
   value       = aws_iam_role.config_recorder.arn
 }
+output "security_alert_topic_arn" {
+  description = "ARN of the SNS topic receiving HIGH-severity security alerts."
+  value       = aws_sns_topic.security_alerts.arn
+}
+output "security_alert_dead_letter_queue_arn" {
+  description = "ARN of the SQS DLQ catching failed EventBridge to SNS deliveries."
+  value       = aws_sqs_queue.security_alert_dlq.arn
+}
+output "high_severity_findings_rule_arn" {
+  description = "ARN of the EventBridge rule routing high-severity findings."
+  value       = aws_cloudwatch_event_rule.high_severity.arn
+}
+output "guardduty_detector_id" {
+  description = "GuardDuty detector ID."
+  value       = aws_guardduty_detector.main.id
+}

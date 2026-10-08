@@ -120,7 +120,21 @@ data "aws_iam_policy_document" "compliance_cmk" {
     }
   }
 
-  # Statement 7: GuardDuty Malware Protection. Scans need CreateGrant + Decrypt
+  # Statement 7: EventBridge publishing to the CMK-encrypted alert topic.
+  # SNS does not honor aws:SourceAccount or aws:SourceArn on this call, so
+  # those conditions would still drop the finding.
+  statement {
+    sid       = "AllowEventBridgeToPublishToEncryptedTopic"
+    effect    = "Allow"
+    actions   = ["kms:GenerateDataKey*", "kms:Decrypt"]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+  }
+
+  # Statement 8: GuardDuty Malware Protection. Scans need CreateGrant + Decrypt
   # + GenerateDataKeyWithoutPlaintext once this CMK is the EBS default. Without
   # this, SI-3 is enabled-but-inoperative. aws:SourceAccount blocks other SLRs.
   statement {
@@ -139,7 +153,7 @@ data "aws_iam_policy_document" "compliance_cmk" {
     }
   }
 
-  # Statement 8: CloudWatch Logs service principal (Layer 1 log groups). The
+  # Statement 9: CloudWatch Logs service principal (Layer 1 log groups). The
   # CFN left both groups on AWS-managed encryption; the port puts them on this
   # CMK (R-1), which only works if logs.<region> can use the key. Scoped by
   # encryption context to log groups in this account and region, not by
