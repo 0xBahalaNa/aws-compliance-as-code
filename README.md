@@ -193,6 +193,8 @@ aws-compliance-as-code/
 
 The numbered CloudFormation prefixes (`01`–`05`) indicate deployment order. Each layer builds on the one before it.
 
+CI runs `terraform fmt -check` and `terraform validate` in `terraform/`, and `cfn-lint cloudformation/*.yaml`, on each pull request and on each push to `main`.
+
 ## AWS Services Used
 
 - **[AWS Organizations](https://aws.amazon.com/organizations/)**: Hosts the SCPs and enforces preventive guardrails across the account hierarchy
