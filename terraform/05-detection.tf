@@ -75,6 +75,29 @@ data "aws_iam_policy_document" "security_alerts" {
       values   = [aws_cloudwatch_event_rule.high_severity.arn]
     }
   }
+
+  # Same confused-deputy pair as AllowEventBridgeToPublish. The CMK grant is
+  # AllowCloudWatchToPublishToEncryptedTopic; the topic policy cannot decrypt.
+  statement {
+    sid    = "AllowCloudWatchToPublish"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.security_alerts.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [local.root_user_activity_alarm_arn]
+    }
+  }
 }
 
 resource "aws_sns_topic_policy" "security_alerts" {
@@ -156,6 +179,39 @@ resource "aws_cloudwatch_event_target" "high_severity" {
     aws_sns_topic_policy.security_alerts,
     aws_sqs_queue_policy.security_alert_dlq,
   ]
+}
+
+# CIS 3.3 / CloudWatch.1. GuardDuty Policy:IAMUser/RootCredentialUsage is LOW,
+# under the severity >= 7 rule, so root use never reached this topic.
+# invokedBy NOT EXISTS and eventType != AwsServiceEvent drop service calls
+# that AWS records as root.
+resource "aws_cloudwatch_log_metric_filter" "root_user_activity" {
+  name           = local.root_user_activity_alarm_name
+  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+  pattern        = "{ ($.userIdentity.type = \"Root\") && ($.userIdentity.invokedBy NOT EXISTS) && ($.eventType != \"AwsServiceEvent\") }"
+
+  metric_transformation {
+    name          = "RootUserActivity"
+    namespace     = "Compliance/CloudTrail"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "root_user_activity" {
+  alarm_name          = local.root_user_activity_alarm_name
+  alarm_description   = "Root user activity in CloudTrail (CIS 3.3 / CloudWatch.1; SI-4(5), AC-6(9), AU-6)."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = aws_cloudwatch_log_metric_filter.root_user_activity.metric_transformation[0].name
+  namespace           = aws_cloudwatch_log_metric_filter.root_user_activity.metric_transformation[0].namespace
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+  tags                = { Layer = "5-Detection" }
+  depends_on          = [aws_sns_topic_policy.security_alerts]
 }
 
 # Hub default (EnableDefaultStandards unset in 05-detection.yaml) turns on
