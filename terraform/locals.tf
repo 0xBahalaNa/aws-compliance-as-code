@@ -3,6 +3,8 @@
 locals {
   admin_boundary_name               = "compliance-admin-boundary"
   bucket_policy_admin_boundary_name = "compliance-bucket-policy-admin-boundary"
+  root_user_activity_alarm_name     = "compliance-root-user-activity"
+  root_user_activity_alarm_arn      = "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.root_user_activity_alarm_name}"
   bucket_policy_admin_actions = [
     "s3:GetBucketPolicy",
     "s3:PutBucketPolicy",
