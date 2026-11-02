@@ -110,7 +110,9 @@ FedRAMP 20x restructures the program around compliance-as-code, machine-readable
 - **API-driven evidence:** Every artifact this baseline produces is API-queryable: `aws configservice describe-compliance-by-resource`, `aws securityhub get-findings`, `aws cloudtrail lookup-events`. No console screenshots required.
 - **30-day vs 90-day review window:** The baseline's per-event JSON evidence stream fits the FedRAMP 20x 30-day machine-readable review SLA. Each Layer 4 compliance state change and each Layer 5 finding is a unit of input to that review.
 
-The baseline pairs with [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline), which transforms these JSON evidence streams into OSCAL Assessment Results (SAR) JSON for FedRAMP 20x submission packages. The August 2026 Terraform conversion (per the Sprint Plan) also covers the CGE-P IaC Portfolio submission: Terraform + OPA/Rego + CI/CD pipeline + KSI dashboard delivered against this baseline's already-defined control set.
+The baseline pairs with [`oscal-evidence-pipeline`](https://github.com/0xBahalaNa/oscal-evidence-pipeline), which transforms these JSON evidence streams into OSCAL Assessment Results (SAR) JSON for FedRAMP 20x submission packages. Terraform in `terraform/` mirrors CloudFormation Layers 1-5 (`01-logging.tf` to `05-detection.tf`). CI runs `terraform fmt -check`, `terraform validate`, and `cfn-lint` on every pull request.
+
+The OPA/Rego policy gate and the KSI rollup are not built yet (#51, #52, #53). #54 rewrites the README once they land.
 
 ## CJIS v6.1 Relevance
 
