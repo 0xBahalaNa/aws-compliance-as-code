@@ -173,6 +173,31 @@ data "aws_iam_policy_document" "compliance_cmk" {
       values   = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:*"]
     }
   }
+
+  # Statement 10: CloudWatch alarms publishing to the CMK-encrypted alert
+  # topic. CloudWatch sets aws:SourceAccount and aws:SourceArn on this call.
+  # EventBridge does not, which is why AllowEventBridgeToPublishToEncryptedTopic
+  # has no condition.
+  statement {
+    sid       = "AllowCloudWatchToPublishToEncryptedTopic"
+    effect    = "Allow"
+    actions   = ["kms:GenerateDataKey*", "kms:Decrypt"]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [local.root_user_activity_alarm_arn]
+    }
+  }
 }
 
 # Callers use the alias so the key id can change underneath.
